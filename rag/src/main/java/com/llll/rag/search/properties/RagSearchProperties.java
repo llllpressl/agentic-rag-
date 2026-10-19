@@ -6,6 +6,8 @@ import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
+
 /** 所有数量参数均从 rag.search 读取，不在搜索流程中写死。 */
 @Getter
 @Setter
@@ -24,6 +26,40 @@ public class RagSearchProperties {
     private int rrfK;
 
     private int maxQueryLength;
+
+    private Duration vectorTimeout = Duration.ofSeconds(5);
+
+    private Duration keywordTimeout = Duration.ofSeconds(3);
+
+    private Duration recallTimeout = Duration.ofSeconds(5);
+
+    private int vectorPoolSize = 4;
+
+    private int keywordPoolSize = 4;
+
+    private int vectorQueueCapacity = 16;
+
+    private int keywordQueueCapacity = 16;
+
+    @PostConstruct
+    public void validateRecallConfiguration() {
+        validateRecallTimeout(vectorTimeout, "vector-timeout");
+        validateRecallTimeout(keywordTimeout, "keyword-timeout");
+        validateRecallTimeout(recallTimeout, "recall-timeout");
+        if (vectorPoolSize < 1 || keywordPoolSize < 1) {
+            throw new IllegalArgumentException("召回执行器线程数必须为正数");
+        }
+        if (vectorQueueCapacity < 0 || keywordQueueCapacity < 0) {
+            throw new IllegalArgumentException("召回执行器队列容量不能小于 0");
+        }
+    }
+
+    private void validateRecallTimeout(Duration timeout, String name) {
+        if (timeout == null || timeout.compareTo(Duration.ofMillis(1)) < 0
+                || timeout.compareTo(Duration.ofMinutes(1)) > 0) {
+            throw new IllegalArgumentException("rag.search." + name + " 必须在 1 毫秒到 1 分钟之间");
+        }
+    }
 
     @PostConstruct
     public void validate() {

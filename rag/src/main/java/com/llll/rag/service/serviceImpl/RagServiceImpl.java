@@ -1,10 +1,16 @@
 package com.llll.rag.service.serviceImpl;
 
+import co.elastic.clients.elasticsearch._types.ElasticsearchException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.llll.rag.ingestion.embedding.service.EmbeddingService;
+import com.llll.rag.search.exception.RetrievalUnavailableException;
+import com.llll.rag.search.model.RecallChannelResult;
+import com.llll.rag.search.model.RecallChannelResult.Channel;
+import com.llll.rag.search.model.RecallChannelResult.FailureStage;
+import com.llll.rag.search.model.RecallChannelResult.Status;
 import com.llll.rag.search.model.RetrieveResult;
 import com.llll.rag.search.properties.RagSearchProperties;
 import com.llll.rag.search.properties.RerankProperties;
@@ -14,6 +20,8 @@ import com.llll.rag.search.retriever.VectorRetriever;
 import com.llll.rag.service.RagService;
 import com.llll.rag.knowledge.dao.mapper.RagSearchMapper;
 import jakarta.annotation.PreDestroy;
+import jakarta.json.JsonException;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.hc.client5.http.classic.methods.HttpPost;
 import org.apache.hc.client5.http.config.ConnectionConfig;
 import org.apache.hc.client5.http.config.RequestConfig;
@@ -24,6 +32,9 @@ import org.apache.hc.core5.http.ContentType;
 import org.apache.hc.core5.http.io.entity.StringEntity;
 import org.apache.hc.core5.util.Timeout;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.dao.DataAccessException;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.util.StringUtils;
 
 import java.io.IOException;
@@ -34,7 +45,15 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
+@Slf4j
 @Service
 public class RagServiceImpl implements RagService, AutoCloseable {
 
@@ -46,6 +65,9 @@ public class RagServiceImpl implements RagService, AutoCloseable {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final CloseableHttpClient httpClient;
     private final RagSearchMapper ragSearchMapper;
+    private final ThreadPoolTaskExecutor vectorRecallExecutor;
+    private final ThreadPoolTaskExecutor keywordRecallExecutor;
+
 
     public RagServiceImpl(
             EmbeddingService embeddingService,
@@ -53,13 +75,17 @@ public class RagServiceImpl implements RagService, AutoCloseable {
             KeywordRetriever keywordRetriever,
             RagSearchProperties searchProperties,
             RerankProperties rerankProperties,
-            RagSearchMapper ragSearchMapper) {
+            RagSearchMapper ragSearchMapper,
+            @Qualifier("vectorRecallExecutor") ThreadPoolTaskExecutor vectorRecallExecutor,
+            @Qualifier("keywordRecallExecutor") ThreadPoolTaskExecutor keywordRecallExecutor) {
         this.embeddingService = embeddingService;
         this.vectorRetriever = vectorRetriever;
         this.keywordRetriever = keywordRetriever;
         this.searchProperties = searchProperties;
         this.rerankProperties = rerankProperties;
         this.ragSearchMapper = ragSearchMapper;
+        this.vectorRecallExecutor = vectorRecallExecutor;
+        this.keywordRecallExecutor = keywordRecallExecutor;
         this.httpClient = HttpClients.custom()
                 .setConnectionManager(PoolingHttpClientConnectionManagerBuilder.create()
                         .setDefaultConnectionConfig(ConnectionConfig.custom()
@@ -76,40 +102,199 @@ public class RagServiceImpl implements RagService, AutoCloseable {
                 .build();
     }
 
+
     @Override
     public List<RetrieveResult> search(RagSearchRequest request) {
         validateRequest(request);
+        requireSearchNotInterrupted();
         String query = request.getQuery();
+        long startedNanos = System.nanoTime();
+        long vectorBudgetNanos = Math.min(
+                searchProperties.getVectorTimeout().toNanos(), searchProperties.getRecallTimeout().toNanos());
+        long keywordBudgetNanos = Math.min(
+                searchProperties.getKeywordTimeout().toNanos(), searchProperties.getRecallTimeout().toNanos());
 
-        // 1. 单个问题复用已有批量向量化能力。
-        List<float[]> vectors = embeddingService.embedBatch(List.of(query));
-        if (vectors == null || vectors.size() != 1) {
-            throw new IllegalStateException("单问题向量化必须返回一个向量");
+        Future<RecallChannelResult> vectorFuture = null;
+        Future<RecallChannelResult> keywordFuture = null;
+        RecallChannelResult vectorResult;
+        RecallChannelResult keywordResult;
+        try {
+            // 两路先提交再等待；计时从提交前开始，排队也占用召回预算。
+            vectorFuture = submitRecall(query, Channel.VECTOR, vectorRecallExecutor, startedNanos, vectorBudgetNanos);
+            keywordFuture = submitRecall(query, Channel.KEYWORD, keywordRecallExecutor, startedNanos, keywordBudgetNanos);
+            // 先收集截止时间更早的一路，及时取消它，不延长其等待预算。
+            if (keywordBudgetNanos <= vectorBudgetNanos) {
+                keywordResult = awaitRecall(keywordFuture, Channel.KEYWORD, startedNanos, keywordBudgetNanos);
+                vectorResult = awaitRecall(vectorFuture, Channel.VECTOR, startedNanos, vectorBudgetNanos);
+            } else {
+                vectorResult = awaitRecall(vectorFuture, Channel.VECTOR, startedNanos, vectorBudgetNanos);
+                keywordResult = awaitRecall(keywordFuture, Channel.KEYWORD, startedNanos, keywordBudgetNanos);
+            }
+        } finally {
+            cancelRecall(vectorFuture, vectorRecallExecutor);
+            cancelRecall(keywordFuture, keywordRecallExecutor);
         }
+        requireSearchNotInterrupted();
+        logRecallResult(vectorResult);
+        logRecallResult(keywordResult);
 
-        // 2. 两路独立召回，召回器记录各自从 1 开始的排名。
-        List<RetrieveResult> vectorResults = vectorRetriever.retrieve(
-                vectors.getFirst(), searchProperties.getVectorTopK());
-        List<RetrieveResult> keywordResults = keywordRetriever.retrieve(
-                query, searchProperties.getBm25TopK());
-
-        // 外部索引可能尚未完成删库清理，融合和重排前先按 PG 当前状态过滤。
-        vectorResults = reloadActiveCandidates(vectorResults);
-        keywordResults = reloadActiveCandidates(keywordResults);
-
-        // 3. 按 Chunk ID 合并并计算 RRF，保留融合候选。
+        boolean degraded = vectorResult.getStatus() != Status.SUCCESS || keywordResult.getStatus() != Status.SUCCESS;
         List<RetrieveResult> fusedResults = rrf(
-                vectorResults, keywordResults, searchProperties.getFusionTopK());
+                vectorResult.getCandidates(), keywordResult.getCandidates(), searchProperties.getFusionTopK());
         if (fusedResults.isEmpty()) {
+            if (degraded) {
+                // 两路都失败，或一路失败而另一路未命中，都不能向模型宣称“没有资料”。
+                throw new RetrievalUnavailableException();
+            }
             return new ArrayList<>();
         }
 
-        // 4. 问题与候选正文一起重排，最后才截取最终 Top-K。
-        List<RetrieveResult> rerankedResults = rerank(query, fusedResults);
-        // 重排包含模型请求，返回前再次排除这段时间内已经删除的知识库。
-        rerankedResults = reloadActiveCandidates(rerankedResults);
-        int resultCount = Math.min(searchProperties.getFinalTopK(), rerankedResults.size());
-        return new ArrayList<>(rerankedResults.subList(0, resultCount));
+        // 不再强制回查 PG，避免 PG 故障中断已经成功的 ES 分支。
+        List<RetrieveResult> rankedResults = rerankOrKeepFusion(query, fusedResults);
+        requireSearchNotInterrupted();
+        int resultCount = Math.min(searchProperties.getFinalTopK(), rankedResults.size());
+        return new ArrayList<>(rankedResults.subList(0, resultCount));
+    }
+
+    private Future<RecallChannelResult> submitRecall(
+            String query, Channel channel, ThreadPoolTaskExecutor executor, long startedNanos, long budgetNanos) {
+        try {
+            return executor.submit(() -> recallChannel(query, channel, startedNanos, budgetNanos));
+        } catch (RejectedExecutionException exception) {
+            RecallChannelResult result = buildRecallResult(channel, Status.FAILED, List.of(),
+                    FailureStage.SUBMISSION, exception.getClass().getSimpleName(), startedNanos);
+            return CompletableFuture.completedFuture(result);
+        }
+    }
+
+    private RecallChannelResult recallChannel(String query, Channel channel, long startedNanos, long budgetNanos) {
+        requireSearchNotInterrupted();
+        if (System.nanoTime() - startedNanos >= budgetNanos) {
+            return buildRecallResult(channel, Status.TIMEOUT, List.of(), FailureStage.WAITING, null, startedNanos);
+        }
+        FailureStage stage = FailureStage.ES;
+        try {
+            List<RetrieveResult> candidates;
+            if (channel == Channel.VECTOR) {
+                stage = FailureStage.EMBEDDING;
+                List<float[]> vectors = embeddingService.embedBatch(List.of(query));
+                if (vectors == null || vectors.size() != 1) {
+                    throw new IllegalStateException("单问题向量化必须返回一个向量");
+                }
+                requireSearchNotInterrupted();
+                if (System.nanoTime() - startedNanos >= budgetNanos) {
+                    return buildRecallResult(channel, Status.TIMEOUT, List.of(), stage, null, startedNanos);
+                }
+                stage = FailureStage.PG_VECTOR;
+                candidates = vectorRetriever.retrieve(vectors.getFirst(), searchProperties.getVectorTopK());
+            } else {
+                candidates = keywordRetriever.retrieve(query, searchProperties.getBm25TopK());
+            }
+            requireSearchNotInterrupted();
+            if (candidates == null) {
+                throw new IllegalStateException("召回器返回了 null 结果");
+            }
+            // 在分支内核对结果，避免异常候选进入融合后拖垮另一条成功分支。
+            for (RetrieveResult candidate : candidates) {
+                if (candidate == null || !StringUtils.hasText(candidate.getId())
+                        || !StringUtils.hasText(candidate.getContent())) {
+                    throw new IllegalStateException("召回候选缺少 Chunk ID 或正文");
+                }
+                Integer rank = candidate.getBm25Rank();
+                if (channel == Channel.VECTOR) {
+                    rank = candidate.getVectorRank();
+                }
+                if (rank == null || rank < 1) {
+                    throw new IllegalStateException("召回候选缺少合法排名");
+                }
+            }
+            return buildRecallResult(channel, Status.SUCCESS, candidates, null, null, startedNanos);
+        } catch (IllegalStateException | DataAccessException | ElasticsearchException | JsonException exception) {
+            requireSearchNotInterrupted();
+            return buildRecallResult(channel, Status.FAILED, List.of(), stage,
+                    exception.getClass().getSimpleName(), startedNanos);
+        }
+    }
+
+    private RecallChannelResult awaitRecall(
+            Future<RecallChannelResult> future, Channel channel, long startedNanos, long budgetNanos) {
+        requireSearchNotInterrupted();
+        long remainingNanos = Math.max(0L, budgetNanos - (System.nanoTime() - startedNanos));
+        try {
+            RecallChannelResult result = future.get(remainingNanos, TimeUnit.NANOSECONDS);
+            // 另一条分支可能等待更久，不能把已超出本路期限的迟到结果当成成功。
+            if (result.getElapsedNanos() > budgetNanos) {
+                return buildRecallResult(channel, Status.TIMEOUT, List.of(), FailureStage.WAITING, null, startedNanos);
+            }
+            return result;
+        } catch (TimeoutException exception) {
+            future.cancel(true);
+            return buildRecallResult(channel, Status.TIMEOUT, List.of(), FailureStage.WAITING, null, startedNanos);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new CancellationException("检索已中断");
+        } catch (ExecutionException exception) {
+            // 依赖故障已在分支内转换；编程错误和取消不伪装成普通降级。
+            Throwable cause = exception.getCause();
+            if (cause instanceof RuntimeException) {
+                throw (RuntimeException) cause;
+            }
+            if (cause instanceof Error) {
+                throw (Error) cause;
+            }
+            throw new IllegalStateException("召回任务异常结束", cause);
+        }
+    }
+
+    private RecallChannelResult buildRecallResult(
+            Channel channel, Status status, List<RetrieveResult> candidates,
+            FailureStage failureStage, String failureType, long startedNanos) {
+        return RecallChannelResult.builder()
+                .channel(channel)
+                .status(status)
+                .candidates(List.copyOf(candidates))
+                .failureStage(failureStage)
+                .failureType(failureType)
+                .elapsedNanos(System.nanoTime() - startedNanos)
+                .build();
+    }
+
+    private void cancelRecall(Future<RecallChannelResult> future, ThreadPoolTaskExecutor executor) {
+        if (future != null) {
+            if (!future.isDone()) {
+                future.cancel(true);
+            }
+            // 移除尚未开始的已取消任务，避免它们继续占用有界队列。
+            executor.getThreadPoolExecutor().purge();
+        }
+    }
+
+    private void logRecallResult(RecallChannelResult result) {
+        if (result.getStatus() != Status.SUCCESS) {
+            log.warn("召回通道降级，channel={}，status={}，stage={}，failureType={}，elapsedMs={}",
+                    result.getChannel(), result.getStatus(), result.getFailureStage(),
+                    result.getFailureType(), result.getElapsedMillis());
+        } else {
+            log.debug("召回通道完成，channel={}，candidateCount={}，elapsedMs={}",
+                    result.getChannel(), result.getCandidates().size(), result.getElapsedMillis());
+        }
+    }
+
+    private List<RetrieveResult> rerankOrKeepFusion(String query, List<RetrieveResult> fusedResults) {
+        requireSearchNotInterrupted();
+        try {
+            return rerank(query, fusedResults);
+        } catch (IllegalStateException | IllegalArgumentException exception) {
+            requireSearchNotInterrupted();
+            log.warn("重排不可用，保留 RRF 顺序，failureType={}", exception.getClass().getSimpleName());
+            return fusedResults;
+        }
+    }
+
+    private void requireSearchNotInterrupted() {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new CancellationException("检索已中断");
+        }
     }
 
     private void validateRequest(RagSearchRequest request) {

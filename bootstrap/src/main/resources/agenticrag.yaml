@@ -1,0 +1,135 @@
+# 统一入口使用 spring.config.name=agenticrag；旧模块 application.yaml 保留作迁移参考。
+server:
+  port: ${SERVER_PORT:9091}
+  servlet:
+    session:
+      timeout: 30m
+      tracking-modes: cookie
+      cookie:
+        http-only: true
+        same-site: strict
+
+spring:
+  profiles:
+    # 默认加载已有本机配置；显式指定其他环境时使用对应环境。
+    default: local
+  application:
+    name: agentic-rag
+  datasource:
+    driver-class-name: org.postgresql.Driver
+    type: com.zaxxer.hikari.HikariDataSource
+    url: ${DB_URL:jdbc:postgresql://127.0.0.1:5432/agentic?client_encoding=UTF8}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:}
+    hikari:
+      connection-timeout: 5000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      maximum-pool-size: 10
+      minimum-idle: 5
+      pool-name: AgenticHikariPool
+  sql:
+    init:
+      mode: never
+  elasticsearch:
+    uris: ${ES_URIS:http://127.0.0.1:19200}
+    # 默认不发送账号密码；服务端启用认证后再通过环境变量传入。
+    username: ${ES_USERNAME:}
+    password: ${ES_PASSWORD:}
+    connection-timeout: 10s
+    socket-timeout: 30s
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 100MB
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+
+agent-ai:
+  deepseek:
+    url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+    api-key: ${DEEPSEEK_API_KEY:}
+    endpoint: /v1/chat/completions
+
+agent:
+  chat:
+    provider: deepseek
+    model: ${AGENT_CHAT_MODEL:deepseek-flash}
+  max-iters: 10
+  max-retries: 1
+  sse-timeout-ms: 900000
+  tools:
+    knowledge-search:
+      max-chunk-characters: 2000
+      max-result-characters: 12000
+
+storage:
+  rustfs:
+    endpoint: ${RUSTFS_ENDPOINT:http://localhost:9000}
+    region: ${RUSTFS_REGION:us-east-1}
+    access-key: ${RUSTFS_ACCESS_KEY:}
+    secret-key: ${RUSTFS_SECRET_KEY:}
+    bucket: ${RUSTFS_BUCKET:rag-text-file}
+
+rocketmq:
+  name-server: ${ROCKETMQ_NAME_SERVER:127.0.0.1:19876}
+  producer:
+    group: agentic-producer
+    send-message-timeout: 2000
+
+knowledge:
+  elasticsearch:
+    chunk-index: ${KNOWLEDGE_CHUNK_INDEX:knowledge_chunk}
+    bulk-size: 100
+  ingestion:
+    chunking:
+      target-characters: 600
+      max-characters: 1000
+      overlap-characters: 0
+    mineru:
+      base-url: ${MINERU_BASE_URL:https://mineru.net}
+      api-key: ${MINERU_API_KEY:}
+      model-version: pipeline
+      connect-timeout: 10s
+      request-timeout: 60s
+      poll-interval: 2s
+      task-timeout: 10m
+      max-file-bytes: 52428800
+      max-archive-bytes: 134217728
+      max-uncompressed-bytes: 536870912
+      max-markdown-bytes: 33554432
+    embedding:
+      base-url: ${EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      api-key: ${EMBEDDING_API_KEY:}
+      model: ${EMBEDDING_MODEL:text-embedding-v4}
+      dimensions: 1024
+      batch-size: 10
+      connect-timeout: 10s
+      request-timeout: 60s
+      max-response-bytes: 2097152
+
+rag:
+  search:
+    vector-top-k: 15
+    bm25-top-k: 15
+    fusion-top-k: 10
+    final-top-k: 5
+    rrf-k: 60
+    max-query-length: 2000
+    # 召回预算包含排队；重排另用 rag.rerank 的 HTTP 超时。
+    vector-timeout: 5s
+    keyword-timeout: 3s
+    recall-timeout: 5s
+    vector-pool-size: 4
+    keyword-pool-size: 4
+    vector-queue-capacity: 16
+    keyword-queue-capacity: 16
+  rerank:
+    endpoint: ${RERANK_ENDPOINT:}
+    model: ${RERANK_MODEL:qwen3-rerank}
+    api-key: ${RERANK_API_KEY:}
+    connect-timeout: 3s
+    request-timeout: 15s
+    max-response-bytes: 2097152

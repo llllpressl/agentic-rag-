@@ -1,6 +1,7 @@
 package com.llll.agent.tool;
 
 import com.llll.agent.config.KnowledgeSearchToolProperties;
+import com.llll.rag.search.exception.RetrievalUnavailableException;
 import com.llll.rag.search.model.RetrieveResult;
 import com.llll.rag.search.request.RagSearchRequest;
 import com.llll.rag.service.RagService;
@@ -38,8 +39,18 @@ public class KnowledgeSearchTool {
                 .query(query)
                 .build();
 
+        /** 原调用交由框架处理所有异常；现仅将专用的不可用异常转换为模型可读状态。
         // 让检索异常交回框架处理，不能把调用失败转换为“未命中”。
         List<RetrieveResult> results = ragService.search(request);
+        */
+        List<RetrieveResult> results;
+        try {
+            results = ragService.search(request);
+        } catch (RetrievalUnavailableException exception) {
+            return "检索问题：" + limitText(query, 256, "[问题已截断]") + "\n"
+                    + "检索状态：检索不可用。当前无法获得可靠的知识库检索结果。\n"
+                    + "请说明检索暂时不可用，不要声称知识库没有相关资料，也不要编造检索证据。\n";
+        }
         if (results == null) {
             throw new IllegalStateException("RAG 检索返回了 null 结果");
         }
