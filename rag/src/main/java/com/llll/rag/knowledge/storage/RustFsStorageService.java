@@ -14,11 +14,20 @@ import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
+import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest;
+import software.amazon.awssdk.services.s3.model.DeleteObjectsResponse;
+import software.amazon.awssdk.services.s3.model.Delete;
+import software.amazon.awssdk.services.s3.model.ObjectIdentifier;
+import software.amazon.awssdk.services.s3.model.S3Object;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 所有知识库原始文档共用一个桶，通过 collection 前缀分组，无需预先创建文件夹。
@@ -90,6 +99,70 @@ public class RustFsStorageService {
     private void requireObjectKey(String objectKey) {
         if (!StringUtils.hasText(objectKey)) {
             throw new IllegalArgumentException("对象 key 不能为空");
+        }
+    }
+
+    /** collection 唯一归属一个 KB；精确清理 collection/，不删除共享桶。 */
+    public void deleteCollection(String collection) {
+        if (collection == null || !collection.matches("[A-Za-z0-9_-]{1,64}")) {
+            throw new IllegalArgumentException("待清理的 collection 不合法");
+        }
+        String prefix = collection + "/";
+        String continuationToken = null;
+        try {
+            while (true) {
+                ListObjectsV2Request request = ListObjectsV2Request.builder()
+                        .bucket(properties.getBucket())
+                        .prefix(prefix)
+                        .maxKeys(500)
+                        .continuationToken(continuationToken)
+                        .build();
+                ListObjectsV2Response page = s3Client.listObjectsV2(request);
+                List<ObjectIdentifier> objects = new ArrayList<>();
+                for (S3Object object : page.contents()) {
+                    if (object.key() == null || !object.key().startsWith(prefix)) {
+                        throw new IllegalStateException("RustFS 返回的文件不属于待删除知识库");
+                    }
+                    objects.add(ObjectIdentifier.builder()
+                            .key(object.key())
+                            .build());
+                }
+                if (!objects.isEmpty()) {
+                    DeleteObjectsResponse response = s3Client.deleteObjects(DeleteObjectsRequest.builder()
+                            .bucket(properties.getBucket())
+                            .delete(Delete.builder()
+                                    .objects(objects)
+                                    .quiet(true)
+                                    .build())
+                            .build());
+                    if (!response.errors().isEmpty()) {
+                        throw new IllegalStateException("RustFS 批量删除存在失败项，请再次删除知识库以重试");
+                    }
+                }
+                if (!Boolean.TRUE.equals(page.isTruncated())) {
+                    break;
+                }
+                String nextToken = page.nextContinuationToken();
+                if (!StringUtils.hasText(nextToken) || nextToken.equals(continuationToken)) {
+                    throw new IllegalStateException("RustFS 分页游标异常，清理尚未完成");
+                }
+                continuationToken = nextToken;
+            }
+            // 再核对一次前缀，不能仅凭批量删除请求成功就宣布文件已清空。
+            ListObjectsV2Response remaining = s3Client.listObjectsV2(ListObjectsV2Request.builder()
+                    .bucket(properties.getBucket())
+                    .prefix(prefix)
+                    .maxKeys(1)
+                    .build());
+            if (!remaining.contents().isEmpty()) {
+                throw new IllegalStateException("RustFS 清理后仍存在知识库文件，请重试");
+            }
+        } catch (S3Exception exception) {
+            if (exception.awsErrorDetails() != null
+                    && "NoSuchBucket".equals(exception.awsErrorDetails().errorCode())) {
+                return;
+            }
+            throw exception;
         }
     }
 

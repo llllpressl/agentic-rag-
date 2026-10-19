@@ -4,6 +4,10 @@ import com.llll.framwork.result.Result;
 import com.llll.rag.knowledge.controller.request.KnowledgeBaseCreateRequest;
 import com.llll.rag.knowledge.controller.request.KnowledgeBaseUpdateRequest;
 import com.llll.rag.knowledge.service.KnowledgeBaseService;
+import com.llll.rag.knowledge.service.KnowledgeBaseCleanupException;
+import com.llll.rag.knowledge.controller.request.KnowledgeBasePageRequest;
+import com.llll.rag.knowledge.controller.vo.KnowledgeBasePageVO;
+import com.llll.rag.knowledge.controller.vo.KnowledgeBaseVO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
@@ -44,7 +48,26 @@ public class KnowledgeBaseController {
      */
     @DeleteMapping("/knowledge/base/{kb-id}")
     public Result<Void> delete (@PathVariable("kb-id") String kbId){
+        /**
         knowledgeBaseService.delete(kbId);
         return Result.success();
+        */
+        try {
+            knowledgeBaseService.delete(kbId);
+            return Result.success();
+        } catch (KnowledgeBaseCleanupException exception) {
+            return Result.fail("KNOWLEDGE_BASE_CLEANUP_FAILED", exception.getMessage());
+        }
+    }
+    /** 查询未删除知识库的详情。 */
+    @GetMapping("/knowledge/base/{kbId}")
+    public Result<KnowledgeBaseVO> detail(@PathVariable String kbId) {
+        return Result.success(knowledgeBaseService.detail(kbId));
+    }
+
+    /** 按名称分页查询未删除的知识库。 */
+    @GetMapping("/knowledge/base/page")
+    public Result<KnowledgeBasePageVO> page(@ModelAttribute KnowledgeBasePageRequest request) {
+        return Result.success(knowledgeBaseService.page(request));
     }
 }

@@ -12,6 +12,7 @@ import com.llll.rag.search.request.RagSearchRequest;
 import com.llll.rag.search.retriever.KeywordRetriever;
 import com.llll.rag.search.retriever.VectorRetriever;
 import com.llll.rag.service.RagService;
+import com.llll.rag.knowledge.dao.mapper.RagSearchMapper;
 import jakarta.annotation.PreDestroy;
 import org.apache.hc.client5.http.classic.methods.HttpPost;
 import org.apache.hc.client5.http.config.ConnectionConfig;
@@ -44,18 +45,21 @@ public class RagServiceImpl implements RagService, AutoCloseable {
     private final RerankProperties rerankProperties;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final CloseableHttpClient httpClient;
+    private final RagSearchMapper ragSearchMapper;
 
     public RagServiceImpl(
             EmbeddingService embeddingService,
             VectorRetriever vectorRetriever,
             KeywordRetriever keywordRetriever,
             RagSearchProperties searchProperties,
-            RerankProperties rerankProperties) {
+            RerankProperties rerankProperties,
+            RagSearchMapper ragSearchMapper) {
         this.embeddingService = embeddingService;
         this.vectorRetriever = vectorRetriever;
         this.keywordRetriever = keywordRetriever;
         this.searchProperties = searchProperties;
         this.rerankProperties = rerankProperties;
+        this.ragSearchMapper = ragSearchMapper;
         this.httpClient = HttpClients.custom()
                 .setConnectionManager(PoolingHttpClientConnectionManagerBuilder.create()
                         .setDefaultConnectionConfig(ConnectionConfig.custom()
@@ -89,6 +93,10 @@ public class RagServiceImpl implements RagService, AutoCloseable {
         List<RetrieveResult> keywordResults = keywordRetriever.retrieve(
                 query, searchProperties.getBm25TopK());
 
+        // 外部索引可能尚未完成删库清理，融合和重排前先按 PG 当前状态过滤。
+        vectorResults = reloadActiveCandidates(vectorResults);
+        keywordResults = reloadActiveCandidates(keywordResults);
+
         // 3. 按 Chunk ID 合并并计算 RRF，保留融合候选。
         List<RetrieveResult> fusedResults = rrf(
                 vectorResults, keywordResults, searchProperties.getFusionTopK());
@@ -98,6 +106,8 @@ public class RagServiceImpl implements RagService, AutoCloseable {
 
         // 4. 问题与候选正文一起重排，最后才截取最终 Top-K。
         List<RetrieveResult> rerankedResults = rerank(query, fusedResults);
+        // 重排包含模型请求，返回前再次排除这段时间内已经删除的知识库。
+        rerankedResults = reloadActiveCandidates(rerankedResults);
         int resultCount = Math.min(searchProperties.getFinalTopK(), rerankedResults.size());
         return new ArrayList<>(rerankedResults.subList(0, resultCount));
     }
@@ -110,6 +120,36 @@ public class RagServiceImpl implements RagService, AutoCloseable {
         if (query.codePointCount(0, query.length()) > searchProperties.getMaxQueryLength()) {
             throw new IllegalArgumentException("搜索问题超过配置的最大字符数");
         }
+    }
+
+    private List<RetrieveResult> reloadActiveCandidates(List<RetrieveResult> candidates) {
+        if (candidates.isEmpty()) {
+            return new ArrayList<>();
+        }
+        List<String> chunkIds = new ArrayList<>();
+        for (RetrieveResult candidate : candidates) {
+            chunkIds.add(candidate.getId());
+        }
+        List<RetrieveResult> currentChunks = ragSearchMapper.selectActiveCandidates(chunkIds);
+        Map<String, String> currentContent = new HashMap<>();
+        for (RetrieveResult currentChunk : currentChunks) {
+            currentContent.put(currentChunk.getId(), currentChunk.getContent());
+        }
+        List<RetrieveResult> activeCandidates = new ArrayList<>();
+        for (RetrieveResult candidate : candidates) {
+            String content = currentContent.get(candidate.getId());
+            if (StringUtils.hasText(content)) {
+                activeCandidates.add(RetrieveResult.builder()
+                        .id(candidate.getId())
+                        .content(content)
+                        .vectorRank(candidate.getVectorRank())
+                        .bm25Rank(candidate.getBm25Rank())
+                        .rrfScore(candidate.getRrfScore())
+                        .rerankScore(candidate.getRerankScore())
+                        .build());
+            }
+        }
+        return activeCandidates;
     }
 
     @Override

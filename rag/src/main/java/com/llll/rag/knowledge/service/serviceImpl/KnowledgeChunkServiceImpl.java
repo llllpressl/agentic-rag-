@@ -16,6 +16,7 @@ import com.llll.rag.knowledge.dao.mapper.KnowledgeBaseMapper;
 import com.llll.rag.knowledge.dao.mapper.KnowledgeChunkMapper;
 import com.llll.rag.knowledge.dao.mapper.KnowledgeDocMapper;
 import com.llll.rag.knowledge.service.KnowledgeChunkService;
+import com.llll.rag.knowledge.service.KnowledgeBaseOperationLock;
 import com.llll.rag.knowledge.enums.MqTopicEnum;
 import com.llll.rag.knowledge.mq.event.DocChunkEsEvent;
 import lombok.RequiredArgsConstructor;
@@ -49,6 +50,7 @@ public class KnowledgeChunkServiceImpl implements KnowledgeChunkService {
     private final TransactionTemplate transactionTemplate;
     private final ElasticsearchClient elasticsearchClient;
     private final RocketMQTemplate rocketMQTemplate;
+    private final KnowledgeBaseOperationLock knowledgeBaseOperationLock;
 
     @Value("${knowledge.elasticsearch.chunk-index:knowledge_chunk}")
     private String chunkIndex;
@@ -56,8 +58,11 @@ public class KnowledgeChunkServiceImpl implements KnowledgeChunkService {
     @Value("${knowledge.elasticsearch.bulk-size:100}")
     private int esBulkSize;
 
+    /**
     @Override
     public void saveChunks(String docId, List<DocumentChunk> chunks, List<float[]> vectors, String operator) {
+    */
+    private void saveChunksWithLock(String docId, List<DocumentChunk> chunks, List<float[]> vectors, String operator) {
         validateInput(docId, chunks, vectors, operator);
 
         // 模型调用已经完成；事务仅包含关联信息读取、分块插入和文档完成更新。
@@ -122,8 +127,11 @@ public class KnowledgeChunkServiceImpl implements KnowledgeChunkService {
         }
     }
 
+    /**
     @Override
     public void saveChunksInEs(DocChunkEsEvent event) {
+    */
+    private void saveChunksInEsWithLock(DocChunkEsEvent event) {
         // 1. 校验消息和文档归属；只同步 PG 分块已经完成的文档。
         if (event == null || !StringUtils.hasText(event.getEventId())
                 || !StringUtils.hasText(event.getDocId()) || !StringUtils.hasText(event.getKbId())) {
@@ -220,6 +228,44 @@ public class KnowledgeChunkServiceImpl implements KnowledgeChunkService {
         // Bulk 成功表示写入被确认，搜索可见性仍取决于 ES refresh；消费重试耗尽后需处理死信。
         log.info("ES Chunk 同步完成，eventId={}，docId={}，chunkCount={}",
                 event.getEventId(), event.getDocId(), indexedCount);
+    }
+
+    /** 在重新校验和实际 PG 写入期间持有 KB 互斥，模型调用不占用互斥。 */
+    @Override
+    public void saveChunks(String docId, List<DocumentChunk> chunks, List<float[]> vectors, String operator) {
+        validateInput(docId, chunks, vectors, operator);
+        KnowledgeDocDO document = knowledgeDocMapper.selectById(docId);
+        if (document == null) {
+            log.info("文档已删除，忽略旧分块结果，docId={}", docId);
+            return;
+        }
+        knowledgeBaseOperationLock.execute(document.getKbId(), () -> {
+            if (knowledgeBaseMapper.selectById(document.getKbId()) == null
+                    || knowledgeDocMapper.selectById(docId) == null) {
+                log.info("知识库或文档已删除，忽略旧分块结果，docId={}", docId);
+                return null;
+            }
+            saveChunksWithLock(docId, chunks, vectors, operator);
+            return null;
+        });
+    }
+
+    /** 互斥覆盖所有 Bulk 请求，删除须等待已开始的同步退出。 */
+    @Override
+    public void saveChunksInEs(DocChunkEsEvent event) {
+        if (event == null || !StringUtils.hasText(event.getEventId())
+                || !StringUtils.hasText(event.getDocId()) || !StringUtils.hasText(event.getKbId())) {
+            throw new IllegalArgumentException("ES 同步消息的标识、文档和知识库不能为空");
+        }
+        knowledgeBaseOperationLock.execute(event.getKbId(), () -> {
+            if (knowledgeBaseMapper.selectById(event.getKbId()) == null
+                    || knowledgeDocMapper.selectById(event.getDocId()) == null) {
+                log.info("知识库或文档已删除，忽略旧 ES 同步，eventId={}", event.getEventId());
+                return null;
+            }
+            saveChunksInEsWithLock(event);
+            return null;
+        });
     }
 
     private List<KnowledgeChunkDO> buildChunkDOs(KnowledgeDocDO document, String collection,

@@ -3,12 +3,14 @@ package com.llll.rag.knowledge.controller.vo;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.Builder;
 
 import java.util.Date;
 
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
+@Builder
 public class KnowledgeDocVO {
 
     private String id;

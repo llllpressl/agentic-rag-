@@ -12,6 +12,7 @@ import java.util.List;
 public interface RagSearchMapper {
 
     /** 与现有 HNSW 索引一致，直接按余弦距离升序召回。 */
+    /** 原向量召回只检查 Chunk 自身状态。
     @Select("""
             SELECT id, content
             FROM t_knowledge_chunk
@@ -24,4 +25,37 @@ public interface RagSearchMapper {
     List<RetrieveResult> searchByVector(
             @Param("queryVector") float[] queryVector,
             @Param("topK") int topK);
+    */
+
+    @Select("""
+            SELECT c.id, c.content
+            FROM t_knowledge_chunk c
+            WHERE c.deleted = 0
+              AND c.enabled = 1
+              AND c.embedding IS NOT NULL
+              AND EXISTS (
+                  SELECT 1 FROM t_knowledge_base k
+                  WHERE k.id = c.kb_id AND k.deleted = 0
+              )
+            ORDER BY c.embedding <=> #{queryVector,jdbcType=OTHER,typeHandler=com.llll.rag.knowledge.dao.handler.VectorTypeHandler}
+            LIMIT #{topK}
+            """)
+    List<RetrieveResult> searchByVector(
+            @Param("queryVector") float[] queryVector,
+            @Param("topK") int topK);
+
+    /** ES 可以暂时落后于 PG；候选必须按 ID 回查，并使用当前 PG 正文。 */
+    @Select("""
+            <script>
+            SELECT c.id, c.content
+            FROM t_knowledge_chunk c
+            JOIN t_knowledge_base k ON k.id = c.kb_id
+            WHERE c.deleted = 0 AND c.enabled = 1 AND k.deleted = 0
+              AND c.id IN
+              <foreach collection="chunkIds" item="chunkId" open="(" separator="," close=")">
+                  #{chunkId}
+              </foreach>
+            </script>
+            """)
+    List<RetrieveResult> selectActiveCandidates(@Param("chunkIds") List<String> chunkIds);
 }

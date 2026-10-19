@@ -57,6 +57,11 @@ public class DocChunkConsumer implements RocketMQListener<DocChunkEvent> {
                 || !StringUtils.hasText(message.getKbId()) || !StringUtils.hasText(message.getUser())) {
             throw new IllegalArgumentException("分块消息的文档、知识库和操作者不能为空");
         }
+        // 已删除 KB 的旧消息直接结束；清理完成后文档本身也可能已被物理删除。
+        if (knowledgeBaseMapper.selectById(message.getKbId()) == null) {
+            log.info("知识库已删除，忽略旧分块消息，kbId={}，docId={}", message.getKbId(), message.getDocId());
+            return;
+        }
         KnowledgeDocDO document = knowledgeDocMapper.selectById(message.getDocId());
         if (document == null || !message.getKbId().equals(document.getKbId())) {
             throw new IllegalArgumentException("分块消息与文档所属知识库不匹配");

@@ -11,10 +11,12 @@ import com.llll.rag.knowledge.dao.mapper.KnowledgeDocMapper;
 import com.llll.rag.knowledge.enums.MqTopicEnum;
 import com.llll.rag.knowledge.mq.event.DocChunkEvent;
 import com.llll.rag.knowledge.service.KnowledgeDocService;
+import com.llll.rag.knowledge.service.KnowledgeBaseOperationLock;
 import com.llll.rag.knowledge.storage.RustFsStorageService;
 import com.llll.rag.knowledge.storage.StorageUploadResult;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
@@ -24,7 +26,9 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.Date;
+import java.io.IOException;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class KnowledgeDocServiceImpl implements KnowledgeDocService {
@@ -34,6 +38,7 @@ public class KnowledgeDocServiceImpl implements KnowledgeDocService {
     private final RustFsStorageService rustFsStorageService;
     private final TransactionTemplate transactionTemplate;
     private final RocketMQTemplate rocketMQTemplate;
+    private final KnowledgeBaseOperationLock knowledgeBaseOperationLock;
 
     private final static String Topic = MqTopicEnum.DOC_CHUNK.getDestination();
 
@@ -69,6 +74,7 @@ public class KnowledgeDocServiceImpl implements KnowledgeDocService {
         );
     }
 
+    /**
     @SneakyThrows
     @Override
     public KnowledgeDocVO upload(String kbId, MultipartFile file) {
@@ -96,6 +102,82 @@ public class KnowledgeDocServiceImpl implements KnowledgeDocService {
         KnowledgeDocVO vo = new KnowledgeDocVO();
         BeanUtils.copyProperties(knowledgeDoc, vo);
         return vo;
+    }
+    */
+
+    @Override
+    public KnowledgeDocVO upload(String kbId, MultipartFile file) {
+        if (UserContext.getUser() == null || !StringUtils.hasText(UserContext.getUser().getUsername())) {
+            throw new IllegalStateException("请先登录");
+        }
+        String operator = UserContext.getUser().getUsername();
+        // 互斥覆盖文件上传与登记，删除不能越过仍在上传的请求提前清空前缀。
+        return knowledgeBaseOperationLock.execute(kbId, () -> uploadWithLock(kbId, file, operator));
+    }
+
+    private KnowledgeDocVO uploadWithLock(String kbId, MultipartFile file, String operator) {
+        KnowledgeBaseDO knowledgeBase = knowledgeBaseMapper.selectById(kbId);
+        if (knowledgeBase == null) {
+            throw new IllegalArgumentException("知识库不存在或已删除");
+        }
+        StorageUploadResult uploadResult;
+        try {
+            uploadResult = rustFsStorageService.upload(knowledgeBase.getCollection(), file);
+        } catch (IOException exception) {
+            throw new IllegalStateException("文档上传失败", exception);
+        }
+
+        KnowledgeDocDO knowledgeDoc = KnowledgeDocDO.builder()
+                .kbId(kbId)
+                .docName(uploadResult.originalFilename().trim())
+                .chunkCount(0)
+                .fileUrl(uploadResult.objectKey())
+                .fileType(uploadResult.fileType())
+                .mimeType(uploadResult.contentType())
+                .fileSize(uploadResult.size())
+                .createBy(operator)
+                .updateBy(operator)
+                .status("pending")
+                .enabled(1)
+                .deleted(0)
+                .build();
+        try {
+            transactionTemplate.executeWithoutResult(status -> {
+                KnowledgeBaseDO current = knowledgeBaseMapper.selectIncludingDeletedForUpdate(kbId);
+                if (current == null || !Integer.valueOf(0).equals(current.getDeleted())) {
+                    throw new IllegalStateException("知识库已删除，不能登记文档");
+                }
+                if (knowledgeDocMapper.insert(knowledgeDoc) != 1) {
+                    throw new IllegalStateException("文档登记失败");
+                }
+            });
+        } catch (RuntimeException exception) {
+            try {
+                rustFsStorageService.delete(uploadResult.objectKey());
+            } catch (RuntimeException cleanupException) {
+                exception.addSuppressed(cleanupException);
+                log.error("文档登记失败，文件补偿删除失败，kbId={}，objectKey={}",
+                        kbId, uploadResult.objectKey(), cleanupException);
+            }
+            throw exception;
+        }
+
+        return KnowledgeDocVO.builder()
+                .id(knowledgeDoc.getId())
+                .kbId(knowledgeDoc.getKbId())
+                .docName(knowledgeDoc.getDocName())
+                .chunkCount(knowledgeDoc.getChunkCount())
+                .fileUrl(knowledgeDoc.getFileUrl())
+                .fileType(knowledgeDoc.getFileType())
+                .mimeType(knowledgeDoc.getMimeType())
+                .fileSize(knowledgeDoc.getFileSize())
+                .createTime(knowledgeDoc.getCreateTime())
+                .updateTime(knowledgeDoc.getUpdateTime())
+                .createBy(knowledgeDoc.getCreateBy())
+                .updateBy(knowledgeDoc.getUpdateBy())
+                .status(knowledgeDoc.getStatus())
+                .enabled(knowledgeDoc.getEnabled())
+                .build();
     }
 
     @Override
