@@ -18,10 +18,16 @@
         <java.version>21</java.version>
     </properties>
     <dependencies>
+        <!-- RAG 工具在同一进程内调用检索服务。 -->
+        <dependency>
+            <groupId>com.llll</groupId>
+            <artifactId>rag</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <!-- 用户模块复用统一响应和用户上下文；认证依赖只追加到 agent 模块。 -->
         <dependency>
             <groupId>com.llll</groupId>
-            <artifactId>framwork</artifactId>
+            <artifactId>framework</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -53,6 +59,9 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <skip>true</skip>
+                </configuration>
             </plugin>
         </plugins>
     </build>

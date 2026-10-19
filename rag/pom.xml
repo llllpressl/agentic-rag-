@@ -22,7 +22,7 @@
     <dependencies>
         <dependency>
             <groupId>com.llll</groupId>
-            <artifactId>framwork</artifactId>
+            <artifactId>framework</artifactId>
             <version>${project.version}</version>
         </dependency>
 
@@ -46,10 +46,10 @@
             <version>${rocketmq-spring.version}</version>
         </dependency>
 
-        <!-- 使用 Boot 管理的 Java API Client，不引入 Spring Data Repository。 -->
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-elasticsearch</artifactId>
+            <groupId>org.elasticsearch.client</groupId>
+            <artifactId>elasticsearch-rest-client</artifactId>
+            <version>${es.version}</version>
         </dependency>
 
         <dependency>
@@ -80,6 +80,9 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <skip>true</skip>
+                </configuration>
             </plugin>
         </plugins>
     </build>

@@ -5,14 +5,12 @@ import com.llll.rag.knowledge.controller.request.KnowledgeBaseCreateRequest;
 import com.llll.rag.knowledge.controller.request.KnowledgeBaseUpdateRequest;
 import com.llll.rag.knowledge.service.KnowledgeBaseService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping
 @RequiredArgsConstructor
 public class KnowledgeBaseController {
-
 
     private final KnowledgeBaseService knowledgeBaseService;
 

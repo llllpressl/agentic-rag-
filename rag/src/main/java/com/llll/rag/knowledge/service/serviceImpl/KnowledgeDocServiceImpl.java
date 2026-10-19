@@ -69,9 +69,6 @@ public class KnowledgeDocServiceImpl implements KnowledgeDocService {
         );
     }
 
-
-
-
     @SneakyThrows
     @Override
     public KnowledgeDocVO upload(String kbId, MultipartFile file) {
@@ -129,7 +126,6 @@ public class KnowledgeDocServiceImpl implements KnowledgeDocService {
         //校验docDO
         KnowledgeDocDO knowledgeDoc = docValidate(docId);
 
-
         // 只更新名称和审计字段，避免覆盖状态、分块数量及文件信息。
         KnowledgeDocDO updateDoc = KnowledgeDocDO.builder()
                 .id(knowledgeDoc.getId())
@@ -142,15 +138,7 @@ public class KnowledgeDocServiceImpl implements KnowledgeDocService {
         }
     }
 
-
-
-
-
-
-
-
     ///------------------------------------------------- 工具方法
-
 
     private KnowledgeDocDO docValidate(String docId){
         if(!StringUtils.hasText(docId)) throw new RuntimeException("docId 不能为空");

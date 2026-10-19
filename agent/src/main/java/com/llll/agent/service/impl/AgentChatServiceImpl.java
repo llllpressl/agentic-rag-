@@ -59,10 +59,7 @@ public class AgentChatServiceImpl implements AgentChatService {
                              String userId, SseEmitter sseEmitter) {
         ReActAgent agent = reActAgentProvider.getAgent();
 
-        /**
-         * 原流程：addConversation 后直接 addUserMessage，再构造 ExecuteParam 并 launchStream。
-         * 现在把会话准备和 user 消息入库放在短事务中；事务结束后才启动模型。
-         */
+        /** 会话准备和 user 消息入库放在短事务中；事务结束后才启动模型。 */
         try {
             ExecuteParam executeParam = transactionTemplate.execute(transactionStatus -> {
                 String title = conversationService.addConversation(userId, conversationId, query);
@@ -89,10 +86,7 @@ public class AgentChatServiceImpl implements AgentChatService {
     private record ExecuteParam(SseEmitter emitter , String userId, String conversationId, String taskId, String title, String lastMessageId){
     }
 
-
-
     private void launchStream(Msg input, ReActAgent agent, ExecuteParam executeParam) {
-        /** 原占位：RuntimeContext、AgentRun、SSE 生命周期、事件订阅和统一收尾待实现。 */
         RuntimeContext runtimeContext = RuntimeContext.builder()
                 .userId(executeParam.userId())
                 .sessionId(executeParam.conversationId())
@@ -121,8 +115,6 @@ public class AgentChatServiceImpl implements AgentChatService {
         }
         handle.start(() -> runningTasks.remove(executeParam.taskId(), handle));
     }
-
-
 
     @Override
     public void confirm(ConfirmRequest confirmRequest, SseEmitter sseEmitter) {

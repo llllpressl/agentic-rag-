@@ -17,8 +17,6 @@ public class ChunkingProperties {
     /** 包括标题与分隔符在内的硬上限。 */
     private int maxCharacters = 1000;
 
-    /** 原字段说明：同一超长段落连续拆分时的正文重叠上限。 */
-    /** private int overlapCharacters = 80; */
     /** 原文保真模式不重复 content，必须为 0。 */
     private int overlapCharacters = 0;
 }

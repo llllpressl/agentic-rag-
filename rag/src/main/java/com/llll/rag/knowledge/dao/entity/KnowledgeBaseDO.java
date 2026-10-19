@@ -24,11 +24,9 @@ public class KnowledgeBaseDO {
 
     private String embeddingModel;
 
-    /** @TableField(value = "createTime", fill = FieldFill.INSERT) */
     @TableField(value = "create_time", fill = FieldFill.INSERT)
     private Date createTime;
 
-    /** @TableField(value = "updateTime", fill = FieldFill.INSERT_UPDATE) */
     @TableField(value = "update_time", fill = FieldFill.INSERT_UPDATE)
     private Date updateTime;
 

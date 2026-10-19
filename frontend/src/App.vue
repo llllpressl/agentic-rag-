@@ -3,7 +3,6 @@ import { ref } from "vue";
 import Icon from "./components/Icon.vue";
 import ChatWorkspace from "./components/ChatWorkspace.vue";
 import KnowledgeWorkspace from "./components/KnowledgeWorkspace.vue";
-import UsersWorkspace from "./components/UsersWorkspace.vue";
 import {
   clearSession,
   currentUser,
@@ -47,7 +46,6 @@ async function login(): Promise<void> {
   loginBusy.value = true;
   loginError.value = "";
   try {
-    /** 原来读取 { accessToken, user }；现在直接读取 Session 登录返回的 UserInfo。 */
     const user = await request<User>(
       "/api/auth/login",
       {
@@ -67,7 +65,6 @@ async function login(): Promise<void> {
   }
 }
 
-/** 原来 logout 只清空页面状态；现在先请求后端销毁 Session。 */
 async function logout(): Promise<void> {
   if (logoutBusy.value) {
     return;
@@ -161,7 +158,6 @@ async function createUser(): Promise<void> {
             v-if="page === 'knowledge'"
           ></span>
         </button>
-        <!-- /** 原来进入管理员账号管理页；当前只开放创建账号。 */ -->
         <button @click="openRegistration">
           <Icon name="users" />创建账号
         </button>
@@ -246,11 +242,6 @@ async function createUser(): Promise<void> {
         @notify="notify"
       />
       <KnowledgeWorkspace v-if="page === 'knowledge'" @notify="notify" />
-      <!-- /** 原管理页依赖尚未实现的列表、修改和删除接口，本阶段不挂载。 */ -->
-      <UsersWorkspace
-        v-if="false"
-        @notify="notify"
-      />
     </main>
     <Transition name="toast"
       ><div v-if="notice" class="toast" role="status">
@@ -283,7 +274,6 @@ async function createUser(): Promise<void> {
         <p class="eyebrow">{{ creatingAccount ? "START HERE" : "WELCOME BACK" }}</p>
         <h2 id="login-heading">{{ creatingAccount ? "创建你的账号" : "回到你的工作空间" }}</h2>
         <p class="muted">{{ creatingAccount ? "创建账号后，登录即可开始对话。" : "使用已有账号登录，继续与 Agent 对话。" }}</p>
-        <!-- /** 原表单只处理 login；现在按模式调用创建用户或登录。 */ -->
         <form @submit.prevent="creatingAccount ? createUser() : login()">
           <label
             >用户名<input
@@ -316,7 +306,6 @@ async function createUser(): Promise<void> {
             }}<Icon name="chevron" :size="16" />
           </button>
         </form>
-        <!-- /** 原来由管理员创建账号；现在提供独立创建入口，刷新后仍需重新登录。 */ -->
         <p class="form-footnote">
           <button class="text-button" type="button" :disabled="loginBusy" @click="toggleAccountMode">
             {{ creatingAccount ? "已有账号，去登录" : "没有账号？创建一个" }}

@@ -12,7 +12,6 @@ import com.llll.agent.dao.mapper.AgentMessageMapper;
 import com.llll.agent.service.AgentConversationService;
 import com.llll.framwork.context.UserContext;
 import lombok.RequiredArgsConstructor;
-import org.springframework.boot.webmvc.autoconfigure.WebMvcProperties;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -29,7 +28,6 @@ public class AgentConversationServiceImpl implements AgentConversationService {
 
     private final AgentConversationMapper conversationMapper;
     private final AgentMessageMapper messageMapper;
-
 
     @Override
     public String addConversation(String userId, String conversationId, String query) {

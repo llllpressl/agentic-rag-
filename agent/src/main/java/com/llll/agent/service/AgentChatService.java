@@ -9,6 +9,5 @@ public interface AgentChatService {
 
     void confirm(ConfirmRequest confirmRequest, SseEmitter sseEmitter);
 
-    /** 原实现：default void stopChat(String taskId) {}，空实现会掩盖停止能力未实现的问题。 */
     void stopChat(String taskId);
 }

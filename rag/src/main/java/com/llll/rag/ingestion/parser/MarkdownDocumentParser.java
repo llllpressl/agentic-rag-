@@ -8,7 +8,6 @@ import org.commonmark.node.Node;
 import org.commonmark.node.SourceSpan;
 import org.commonmark.parser.IncludeSourceSpans;
 import org.commonmark.parser.Parser;
-/** import org.commonmark.renderer.text.TextContentRenderer; */
 import org.springframework.stereotype.Component;
 
 import java.io.File;
@@ -26,7 +25,6 @@ public class MarkdownDocumentParser implements DocumentParser {
             .extensions(List.of(TablesExtension.create()))
             .includeSourceSpans(IncludeSourceSpans.BLOCKS)
             .build();
-    /** private final TextContentRenderer titleRenderer = TextContentRenderer.builder().build(); */
 
     @Override
     public boolean supports(String fileType) {
@@ -47,78 +45,6 @@ public class MarkdownDocumentParser implements DocumentParser {
     }
 
     /** 原生 Markdown 与 MinerU 的 full.md 复用同一条 Block 构建路径。 */
-    /**
-     * 原实现：渲染标题并裁掉章节空行，无法完整还原 Markdown 原文。
-    public ParseResult parseMarkdown(String markdown) {
-        if (markdown == null || markdown.isBlank()) {
-            throw new IllegalArgumentException("解析正文为空");
-        }
-        String source = markdown.startsWith("\uFEFF") ? markdown.substring(1) : markdown;
-        source = source.replace("\r\n", "\n").replace('\r', '\n');
-        Node root = parser.parse(source);
-        var blocks = new ArrayList<DocumentBlock>();
-        int bodyStart = 0;
-        int level = 0;
-        String title = "";
-
-        // 只以文档顶层标题划分章节；引用、列表及代码内部的内容留在当前正文。
-        for (Node node = root.getFirstChild(); node != null; node = node.getNext()) {
-            if (!(node instanceof Heading heading)) {
-                continue;
-            }
-            var spans = heading.getSourceSpans();
-            if (spans.isEmpty()) {
-                throw new IllegalStateException("Markdown 标题缺少源位置");
-            }
-            int headingStart = spans.getFirst().getInputIndex();
-            addBlock(blocks, level, title, source.substring(bodyStart, headingStart));
-            level = heading.getLevel();
-            title = titleRenderer.render(heading).strip();
-            var last = spans.getLast();
-            bodyStart = last.getInputIndex() + last.getLength();
-            if (bodyStart < source.length() && source.charAt(bodyStart) == '\n') {
-                bodyStart++;
-            }
-        }
-        addBlock(blocks, level, title, source.substring(bodyStart));
-        if (blocks.isEmpty()) {
-            throw new IllegalArgumentException("文档没有可用于分块的标题或正文");
-        }
-        return new ParseResult(List.copyOf(blocks));
-    }
-
-    private void addBlock(List<DocumentBlock> blocks, int level, String title, String rawBody) {
-        String body = trimBlankLines(rawBody);
-        if (title.isBlank() && body.isBlank()) {
-            return;
-        }
-        blocks.add(new DocumentBlock(blocks.size(), level, title, body));
-    }
-
-    // 只移除章节边缘的空白行，保留代码或列表的首行缩进。
-    private String trimBlankLines(String text) {
-        int start = 0;
-        int end = text.length();
-        while (start < end) {
-            int newline = text.indexOf('\n', start);
-            int lineEnd = newline < 0 ? end : newline;
-            if (!text.substring(start, lineEnd).isBlank()) {
-                break;
-            }
-            start = newline < 0 ? end : newline + 1;
-        }
-        while (end > start) {
-            int newline = text.lastIndexOf('\n', end - 1);
-            int lineStart = Math.max(start, newline + 1);
-            if (!text.substring(lineStart, end).isBlank()) {
-                break;
-            }
-            end = newline < start ? start : newline;
-        }
-        // 最后一行有内容时，移除其末尾的换行；不剥离该行的空格。
-        return text.substring(start, end);
-    }
-    */
 
     /** 标题和正文均按原始字符串的位置切片，保留 Markdown 标记、换行和空行。 */
     public ParseResult parseMarkdown(String markdown) {

@@ -20,14 +20,11 @@ public class AgentMessageServiceImpl implements AgentMessageService {
         AgentMessageDO agentMessageDO = AgentMessageDO.builder()
                 .userId(userId)
                 .conversationId(conversationId)
-                /** 原值：.role("USER")，改为小写。 */
                 .role("user")
                 .content(query)
                 .thinkingContent(null)
-                /** 原值：.block(null)，数据库要求 block 为非空 JSON 对象。 */
                 .block(JsonNodeFactory.instance.objectNode())
                 .lastMessageId(null)
-                /** 原值：.status("NORMAL")，改为小写。 */
                 .status("normal")
                 .createTime(new Date())
                 .updateTime(new Date())

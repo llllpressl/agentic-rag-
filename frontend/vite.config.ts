@@ -1,7 +1,7 @@
 import { defineConfig, loadEnv } from "vite";
 import vue from "@vitejs/plugin-vue";
 
-/** 浏览器始终访问同源路径；两个独立后端由开发服务分别转发。 */
+/** 原配置连接两个独立后端；现在默认将 Agent 和知识库请求都转发到统一应用。 */
 export default defineConfig(({ mode }) => {
   const environment = loadEnv(mode, process.cwd(), "");
   return {
@@ -15,7 +15,8 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
         },
         "/knowledge": {
-          target: environment.RAG_BACKEND_URL || "http://127.0.0.1:9090",
+          /** 原默认目标：http://127.0.0.1:9090。仍允许通过环境变量连接独立 RAG。 */
+          target: environment.RAG_BACKEND_URL || "http://127.0.0.1:9091",
           changeOrigin: true,
         },
       },

@@ -17,23 +17,18 @@ public class KnowledgeDocController {
     private final KnowledgeDocService knowledgeDocService;
 
     /// 核心。
-    /** @PostMapping() */
     @PostMapping("/knowledge/document/{docId}/chunk")
     public Result<Void> startChunk(@PathVariable String docId){
         knowledgeDocService.startChunk(docId);
         return Result.success();
     }
 
-
-    /** @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE) */
     @PostMapping(value = "/knowledge/base/{kbId}/document", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Result<KnowledgeDocVO> upload(
             @PathVariable String kbId,
             @RequestParam("file") MultipartFile file) {
         return Result.success(knowledgeDocService.upload(kbId, file));
     }
-
-
 
     @DeleteMapping("/knowledge/document/{doc-id}")
     public Result<Void> delete(@PathVariable("doc-id") String docId){

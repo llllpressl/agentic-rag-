@@ -486,14 +486,6 @@ code {
   text-overflow: ellipsis;
   overflow: hidden;
 }
-.conversation-delete {
-  opacity: 0;
-  padding: 5px;
-}
-.conversation-item:hover .conversation-delete,
-.conversation-item:focus-within .conversation-delete {
-  opacity: 1;
-}
 .history-empty {
   text-align: center;
   padding: 50px 4px;
@@ -1297,44 +1289,6 @@ td {
   margin-top: 17px;
   font-size: 10px;
 }
-.users-card {
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: #fff;
-  padding: 25px;
-}
-.user-search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.user-search .secondary {
-  padding: 8px 13px;
-  font-size: 11px;
-}
-.user-cell {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.user-cell strong {
-  font-weight: 500;
-}
-.pagination {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 22px;
-  font-size: 10px;
-  color: #9aa88c;
-}
-.pagination span {
-  margin-right: auto;
-}
-.pagination button {
-  font-size: 10px;
-  padding: 8px 12px;
-}
 .error-banner {
   display: flex;
   align-items: center;
@@ -1765,9 +1719,6 @@ label > small {
   .conversation-item > button:first-child {
     padding: 10px 7px;
   }
-  .conversation-delete {
-    opacity: 1;
-  }
   .chat-main {
     min-height: 0;
   }
@@ -1876,18 +1827,6 @@ label > small {
   }
   .library-content table {
     min-width: 510px;
-  }
-  .users-card {
-    padding: 17px;
-  }
-  .users-card table {
-    min-width: 540px;
-  }
-  .user-search {
-    width: 100%;
-  }
-  .user-search .search-input {
-    flex: 1;
   }
   .modal {
     padding: 29px 24px;

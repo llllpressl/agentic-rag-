@@ -7,7 +7,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
-/** import java.util.TreeMap; */
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -15,9 +14,6 @@ import java.util.regex.Pattern;
 @Component
 public class CharacterChunker implements Chunker {
 
-    /** 原换行匹配规则：
-    private static final Pattern PARAGRAPH_BREAK = Pattern.compile("\n[\t ]*\n(?:[\t ]*\n)*");
-    */
     private static final String LINE_BREAK = "(?:\\r\\n|\\r(?!\\n)|\\n)";
     private static final Pattern SOURCE_PARAGRAPH_BREAK = Pattern.compile(
             LINE_BREAK + "[\\t ]*" + LINE_BREAK + "(?:[\\t ]*" + LINE_BREAK + ")*");
@@ -36,165 +32,6 @@ public class CharacterChunker implements Chunker {
             throw new IllegalArgumentException("原文保真分块要求 overlap-characters 为 0");
         }
     }
-
-    /**
-     * 原实现：按 Block 独立分块，补入祖先标题并重复超长正文片段。
-    @Override
-    public List<DocumentChunk> chunk(List<DocumentBlock> blocks) {
-        if (blocks == null || blocks.isEmpty()) {
-            throw new IllegalArgumentException("待分块的 Block 不能为空");
-        }
-        var chunks = new ArrayList<DocumentChunk>();
-        var headings = new TreeMap<Integer, String>();
-        for (DocumentBlock block : blocks) {
-            if (block == null || block.getLevel() == null || block.getLevel() < 0 || block.getLevel() > 6) {
-                throw new IllegalArgumentException("Block 标题等级必须在 0 到 6 之间");
-            }
-            int level = block.getLevel();
-            String title = block.getTitle() == null ? "" : block.getTitle();
-            String body = block.getContent() == null ? "" : block.getContent();
-            if (level == 0) {
-                headings.clear();
-            } else {
-                headings.tailMap(level, true).clear();
-                if (!title.isBlank()) {
-                    headings.put(level, title);
-                }
-            }
-            String context = String.join("\n", headings.values());
-            if (level == 0 && !title.isBlank()) {
-                context = title;
-            }
-            if (body.isBlank()) {
-                if (!title.isBlank()) {
-                    emit(chunks, context, "");
-                }
-                continue;
-            }
-            String prefix = context.isBlank() ? "" : context + "\n\n";
-            int prefixLength = length(prefix);
-            int hardBudget = maximum - prefixLength;
-            if (hardBudget <= 0) {
-                throw new IllegalArgumentException("标题上下文占满分块上限，无法保留正文");
-            }
-            int softBudget = Math.max(1, target - prefixLength);
-            splitBody(chunks, prefix, body, softBudget, hardBudget);
-        }
-        if (chunks.isEmpty()) {
-            throw new IllegalArgumentException("分块结果为空");
-        }
-        return List.copyOf(chunks);
-    }
-
-    private void splitBody(List<DocumentChunk> chunks, String prefix, String body,
-                           int softBudget, int hardBudget) {
-        var buffer = new StringBuilder();
-        int bufferedLength = 0;
-        for (String paragraph : paragraphs(body)) {
-            int paragraphLength = length(paragraph);
-            if (bufferedLength > 0 && bufferedLength + paragraphLength > softBudget) {
-                emit(chunks, prefix, buffer.toString());
-                buffer.setLength(0);
-                bufferedLength = 0;
-            }
-            if (paragraphLength > hardBudget) {
-                splitLongParagraph(chunks, prefix, paragraph, softBudget, hardBudget);
-            } else {
-                buffer.append(paragraph);
-                bufferedLength += paragraphLength;
-            }
-        }
-        if (bufferedLength > 0) {
-            emit(chunks, prefix, buffer.toString());
-        }
-    }
-
-    private List<String> paragraphs(String body) {
-        var parts = new ArrayList<String>();
-        var matcher = PARAGRAPH_BREAK.matcher(body);
-        int start = 0;
-        while (matcher.find()) {
-            // 分隔符随前一段保留，合并时不添加或丢弃原有字符。
-            parts.add(body.substring(start, matcher.end()));
-            start = matcher.end();
-        }
-        if (start < body.length()) {
-            parts.add(body.substring(start));
-        }
-        return parts;
-    }
-
-    private void splitLongParagraph(List<DocumentChunk> chunks, String prefix, String paragraph,
-                                    int softBudget, int hardBudget) {
-        int[] points = paragraph.codePoints().toArray();
-        int start = 0;
-        while (start < points.length) {
-            int end;
-            if (points.length - start <= hardBudget) {
-                end = points.length;
-            } else {
-                end = preferredEnd(points, start, softBudget, hardBudget);
-            }
-            emit(chunks, prefix, new String(points, start, end - start));
-            if (end == points.length) {
-                break;
-            }
-            // 正文有足够空间时使用 80；小预算时缩短重叠，始终保证前进。
-            int repeated = Math.min(overlap, Math.max(0, (end - start) / 2));
-            start = end - repeated;
-        }
-    }
-
-    private int preferredEnd(int[] points, int start, int softBudget, int hardBudget) {
-        int desired = start + Math.min(softBudget, hardBudget);
-        int lower = start + Math.max(1, Math.min(softBudget, hardBudget) / 2);
-        int upper = Math.min(points.length, start + hardBudget);
-        // 句子边界优先，其次完整行，最后词边界；均在目标附近选择。
-        for (int kind = 0; kind < 3; kind++) {
-            int best = -1;
-            for (int end = lower; end <= upper; end++) {
-                if (isBoundary(points, end, kind)
-                        && (best < 0 || Math.abs(end - desired) < Math.abs(best - desired))) {
-                    best = end;
-                }
-            }
-            if (best >= 0) {
-                return best;
-            }
-        }
-        return desired;
-    }
-
-    private boolean isBoundary(int[] points, int end, int kind) {
-        int previous = points[end - 1];
-        if (kind == 1) {
-            return previous == '\n';
-        }
-        if (kind == 2) {
-            return Character.isWhitespace(previous);
-        }
-        if ("。！？；".indexOf(previous) >= 0) {
-            return true;
-        }
-        return ".!?;".indexOf(previous) >= 0
-                && (end == points.length || Character.isWhitespace(points[end]));
-    }
-
-    private void emit(List<DocumentChunk> chunks, String prefix, String body) {
-        String content = prefix + body;
-        if (content.isBlank()) {
-            return;
-        }
-        if (length(content) > maximum) {
-            throw new IllegalArgumentException("分块文本超出字符上限");
-        }
-        chunks.add(new DocumentChunk(chunks.size(), content));
-    }
-
-    private int length(String text) {
-        return text.codePointCount(0, text.length());
-    }
-    */
 
     @Override
     public List<DocumentChunk> chunk(List<DocumentBlock> blocks) {

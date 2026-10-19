@@ -9,7 +9,6 @@ public interface KnowledgeBaseService {
 
     void update(String kbId, KnowledgeBaseUpdateRequest requestParam);
 
-
     void delete(String kbId);
 
 }

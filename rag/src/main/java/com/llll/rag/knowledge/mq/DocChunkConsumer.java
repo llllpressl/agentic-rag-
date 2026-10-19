@@ -1,7 +1,7 @@
 package com.llll.rag.knowledge.mq;
 
 import com.llll.rag.ingestion.chunker.Chunker;
-import com.llll.rag.ingestion.embedding.embeddingService.EmbeddingService;
+import com.llll.rag.ingestion.embedding.service.EmbeddingService;
 import com.llll.rag.ingestion.model.DocumentChunk;
 import com.llll.rag.ingestion.model.ParseResult;
 import com.llll.rag.ingestion.parser.DocumentParser;
@@ -50,27 +50,6 @@ public class DocChunkConsumer implements RocketMQListener<DocChunkEvent> {
     private final Chunker chunker;
     private final EmbeddingService embeddingService;
     private final KnowledgeChunkService knowledgeChunkService;
-
-    /**
-    @Override
-    public void onMessage(DocChunkEvent message) {
-        String docId = message.getDocId();
-        String kbId = message.getKbId();
-        String operator = message.getUser();
-        String collection = knowledgeBaseMapper.selectById(kbId).getCollection(); // 回填 chunk 字段的重要内容
-        /// TODO 以后添加记录 parser， chunker， embedding， total 用时的 DocChunkTaskLogDo
-        /// 1. 进行parser，这步之后应该大概就是 List<Block> 的样子
-        /// 2. 进行chunker，这步之后应该大概就是 List<Chunk> 的样子
-        /// 3. 进行embedding，这步之后应该大概就是 List<Embedding> 的样子
-        /// 4. 进行入库操作，create，updateTime字段不用记录，enabled 默认 1，deleted 默认 0
-        ///    create，updateBy 是operator，token count用预估的（在chunker 的count里的TokenCounter），
-        ///    charCount 我不知道用啥字段存，我也不知道哪里获得
-        ///    embedding 就是向量化之后的浮点数组，content 填入合并了block后的chunk内容，chunkIndex在入库时应该就会递增写入
-        ///    id字段不用填，mybatis-plus自己填充，kbId，docId，collection都在上面，直接填入就行。
-        /// 这个操作就不加Transactional注解了，考虑在 PG 入库的时候加上编程式事务，并在该事务成功后发异步消息去做es的同步入库或者异步入库。
-
-    }
-    */
 
     @Override
     public void onMessage(DocChunkEvent message) {

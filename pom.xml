@@ -16,10 +16,12 @@
     <description>AgenticRag</description>
 
     <modules>
-        <module>framwork</module>
+        <module>framework</module>
         <module>agent</module>
         <module>rag</module>
+        <module>bootstrap</module>
     </modules>
+
     <properties>
         <java.version>21</java.version>
         <agentscope.version>2.0.4</agentscope.version>
@@ -27,7 +29,11 @@
         <tika.version>4.1.0</tika.version>
         <baomidou.version>3.5.17</baomidou.version>
         <s3.version>2.25.27</s3.version>
+        <es.version>8.19.0</es.version>
+        <!-- 同时对齐 Boot 管理的底层 REST 客户端版本。 -->
+        <elasticsearch.version>8.19.0</elasticsearch.version>
     </properties>
+
     <dependencyManagement>
         <dependencies>
             <dependency>
@@ -56,50 +62,50 @@
         </dependency>
 
             <!-- Spring Boot Web -->
-            <dependency>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-starter-web</artifactId>
-            </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
 
             <!-- AgentScope Core -->
-            <dependency>
-                <groupId>io.agentscope</groupId>
-                <artifactId>agentscope-core</artifactId>
-                <version>${agentscope.version}</version>
-            </dependency>
+        <dependency>
+            <groupId>io.agentscope</groupId>
+            <artifactId>agentscope-core</artifactId>
+            <version>${agentscope.version}</version>
+        </dependency>
 
             <!-- DeepSeek API 兼容模型支持 -->
-            <dependency>
-                <groupId>io.agentscope</groupId>
-                <artifactId>agentscope-extensions-model-openai</artifactId>
-                <version>${agentscope.version}</version>
-            </dependency>
+        <dependency>
+            <groupId>io.agentscope</groupId>
+            <artifactId>agentscope-extensions-model-openai</artifactId>
+            <version>${agentscope.version}</version>
+        </dependency>
 
             <!-- Jackson -->
-            <dependency>
-                <groupId>com.fasterxml.jackson.core</groupId>
-                <artifactId>jackson-databind</artifactId>
-            </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
 
             <!-- Hutool -->
-            <dependency>
-                <groupId>cn.hutool</groupId>
-                <artifactId>hutool-all</artifactId>
-                <version>${hutool.version}</version>
-            </dependency>
+        <dependency>
+            <groupId>cn.hutool</groupId>
+            <artifactId>hutool-all</artifactId>
+            <version>${hutool.version}</version>
+        </dependency>
 
             <!-- Lombok -->
-            <dependency>
-                <groupId>org.projectlombok</groupId>
-                <artifactId>lombok</artifactId>
-                <optional>true</optional>
-            </dependency>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
 
-            <dependency>
-                <groupId>software.amazon.awssdk</groupId>
-                <artifactId>s3</artifactId>
-                <version>${s3.version}</version>
-            </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+            <version>${s3.version}</version>
+        </dependency>
 
         <dependency>
             <groupId>com.baomidou</groupId>
@@ -111,6 +117,12 @@
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>co.elastic.clients</groupId>
+            <artifactId>elasticsearch-java</artifactId>
+            <version>${es.version}</version>
         </dependency>
 
     </dependencies>

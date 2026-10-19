@@ -3,7 +3,6 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import {
   currentUser,
   errorMessage,
-  /** 原先用 JSON 单独创建会话；现在第一条聊天请求由后端自动创建。 */
   request,
   streamChat,
 } from "../api";
@@ -161,28 +160,6 @@ async function selectConversation(conversation: Conversation): Promise<void> {
   await loadMessages();
 }
 
-/** 删除接口暂未实现，保留原函数，当前模板不挂载删除按钮。 */
-async function deleteConversation(conversation: Conversation): Promise<void> {
-  if (
-    !window.confirm(`删除“${conversation.title || "未命名对话"}”及其消息？`)
-  ) {
-    return;
-  }
-  try {
-    await request(
-      `/api/conversations/${encodeURIComponent(conversation.conversationId)}`,
-      { method: "DELETE" },
-    );
-    if (selectedId.value === conversation.conversationId) {
-      newConversation();
-    }
-    await loadConversations();
-    emit("notify", "会话已删除");
-  } catch (failure) {
-    error.value = errorMessage(failure);
-  }
-}
-
 async function send(): Promise<void> {
   if (
     !content.value.trim() ||
@@ -206,7 +183,6 @@ async function send(): Promise<void> {
   let assistant: Message | undefined;
   let accepted = false;
   try {
-    /** 原先先 POST /api/conversations；现允许空会话 ID，等待 start 返回实际会话。 */
     content.value = "";
     messages.value.push({
       id: "pending-user",
@@ -232,7 +208,6 @@ async function send(): Promise<void> {
         if (disposed || !assistant) {
           return;
         }
-        /** 原先每个事件都覆盖消息 ID；现在只读取该事件实际提供的字段。 */
         if (name === "start") {
           if (!event.conversationId || !event.taskId || !event.userMessageId) {
             throw new Error("本轮对话缺少任务信息，请刷新会话列表核对");
@@ -274,7 +249,6 @@ async function send(): Promise<void> {
           ) {
             error.value = event.message || `回复未正常完成（${event.reason || "未知原因"}）`;
           }
-          /** 原原因码为 PERSISTENCE_ERROR；当前后端使用 persistence_error。 */
           if (event.reason === "persistence_error"
               || (name === "error" && !event.assistantMessageId)) {
             needsReload.value = true;
@@ -308,7 +282,6 @@ async function send(): Promise<void> {
 }
 
 async function stop(): Promise<void> {
-  /** 原先按 assistant.id 停止；assistant 结束后才入库，生成中应使用 taskId。 */
   if (!sending.value || !activeTaskId.value || stopping.value) {
     return;
   }
@@ -396,15 +369,6 @@ onBeforeUnmount(() => {
             <Icon name="chat" :size="16" /><span>{{
               conversation.title || "未命名对话"
             }}</span>
-          </button>
-          <button
-            v-if="false"
-            class="conversation-delete icon-button"
-            aria-label="删除会话"
-            :disabled="sending"
-            @click="deleteConversation(conversation)"
-          >
-            <Icon name="trash" :size="14" />
           </button>
         </div>
         <div v-if="!filtered.length" class="history-empty">

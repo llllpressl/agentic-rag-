@@ -3,7 +3,6 @@ package com.llll.agent.dao.entity;
 import com.baomidou.mybatisplus.annotation.*;
 import lombok.*;
 
-import java.time.LocalDateTime;
 import java.util.Date;
 
 @Data

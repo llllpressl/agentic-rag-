@@ -1,22 +1,18 @@
 import { ref } from "vue";
 import type { StreamEvent, User } from "./types";
 
-/** 原来保存 accessToken 并发送 Bearer；现在由浏览器携带同源 Session Cookie。 */
 export const currentUser = ref<User | null>(null);
 
-/** 原签名：setSession(token: string, user: User)。 */
 export function setSession(user: User): void {
   currentUser.value = user;
 }
 
 export function clearSession(): void {
-  /** 原来同时清理 accessToken；服务端 Session 由 logout 接口销毁。 */
   currentUser.value = null;
 }
 
 function headersFor(body?: BodyInit | null): Headers {
   const headers = new Headers();
-  /** 原来在这里设置 Authorization: Bearer；Session 请求无需该请求头。 */
   if (body && !(body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
@@ -74,7 +70,6 @@ export async function streamChat(
   signal: AbortSignal,
   onEvent: (name: string, event: StreamEvent) => void,
 ): Promise<void> {
-  /** 原来 POST /api/conversations/{id}/chat 并发送 JSON；现改用统一聊天入口。 */
   const body = new URLSearchParams();
   body.set("query", content);
   if (conversationId) {

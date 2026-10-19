@@ -47,9 +47,14 @@ build/
 # Frontend workspace added for the local UI.
 !/frontend/
 
-# Private local configuration must never be uploaded.
+# 统一启动模块及已更名的公共模块。
+!/bootstrap/
+!/framework/
+
+# 本地运行配置和会话资料包含真实凭据，不能提交。
+/bootstrap/src/main/resources/agenticrag-local.yaml
+/bootstrap/.runtime/
+
+# GitHub copy excludes all local YAML configuration.
 *.yaml
 *.yml
-.env
-.env.*
-!**/.env.example
