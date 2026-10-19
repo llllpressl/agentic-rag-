@@ -1,4 +1,4 @@
-package com.llll.rag.ingestion.embedding.service;
+package com.llll.rag.ingestion.embedding;
 
 import java.util.List;
 

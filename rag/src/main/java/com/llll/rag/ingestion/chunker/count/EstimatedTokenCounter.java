@@ -1,6 +1,5 @@
-package com.llll.rag.ingestion.chunker.count.countImpl;
+package com.llll.rag.ingestion.chunker.count;
 
-import com.llll.rag.ingestion.chunker.count.TokenCounter;
 import org.springframework.stereotype.Component;
 
 /** 模拟实现 tokenizer。

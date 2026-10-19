@@ -1,7 +1,7 @@
 package com.llll.rag.knowledge.mq;
 
 import com.llll.rag.ingestion.chunker.Chunker;
-import com.llll.rag.ingestion.embedding.service.EmbeddingService;
+import com.llll.rag.ingestion.embedding.EmbeddingService;
 import com.llll.rag.ingestion.model.DocumentChunk;
 import com.llll.rag.ingestion.model.ParseResult;
 import com.llll.rag.ingestion.parser.DocumentParser;

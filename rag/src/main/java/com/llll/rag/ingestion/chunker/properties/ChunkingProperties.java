@@ -17,6 +17,6 @@ public class ChunkingProperties {
     /** 包括标题与分隔符在内的硬上限。 */
     private int maxCharacters = 1000;
 
-    /** 原文保真模式不重复 content，必须为 0。 */
+    /** 结构分块不重复实质性正文，必须为 0；必要标题和表头不属于正文 overlap。 */
     private int overlapCharacters = 0;
 }

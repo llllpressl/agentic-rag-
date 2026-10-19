@@ -1,7 +1,5 @@
-package com.llll.rag.ingestion.embedding.service.serviceImpl;
+package com.llll.rag.ingestion.embedding;
 
-import com.llll.rag.ingestion.embedding.service.EmbeddingService;
-import com.llll.rag.ingestion.embedding.EmbeddingProperties;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;

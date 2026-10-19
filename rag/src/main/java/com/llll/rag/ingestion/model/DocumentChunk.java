@@ -17,6 +17,7 @@ public class DocumentChunk {
     /** 文档内分块序号，从 0 开始且连续。 */
     private Integer index;
 
-    /** 连续原文切片，也是 Embedding 输入；按序直接拼接可还原解析源文，不补标题或重叠文本。 */
+    /** 原约定：连续原文切片，按序直接拼接可还原解析源文。 */
+    /** 规范化后的检索正文，也是 Embedding 输入；允许重复必要标题、表头及结构标记，不重复正文。 */
     private String content;
 }
