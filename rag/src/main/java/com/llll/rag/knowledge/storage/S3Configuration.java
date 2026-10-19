@@ -9,7 +9,6 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 
 import java.net.URI;
-/// TODO ai写的
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(RustFsProperties.class)
 public class S3Configuration {

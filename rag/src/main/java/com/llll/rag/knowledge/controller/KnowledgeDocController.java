@@ -1,7 +1,9 @@
 package com.llll.rag.knowledge.controller;
 
 import com.llll.framwork.result.Result;
+import com.llll.rag.knowledge.controller.request.KnowledgeDocPageRequest;
 import com.llll.rag.knowledge.controller.request.KnowledgeDocUpdateRequest;
+import com.llll.rag.knowledge.controller.vo.KnowledgeDocPageVO;
 import com.llll.rag.knowledge.controller.vo.KnowledgeDocVO;
 import com.llll.rag.knowledge.service.KnowledgeDocService;
 import lombok.RequiredArgsConstructor;
@@ -20,6 +22,13 @@ public class KnowledgeDocController {
     @PostMapping("/knowledge/document/{docId}/chunk")
     public Result<Void> startChunk(@PathVariable String docId){
         knowledgeDocService.startChunk(docId);
+        return Result.success();
+    }
+
+    /** 同步补写 ES；仅在全部写入并更新文档状态成功后返回。 */
+    @PostMapping("/knowledge/document/{docId}/es-sync")
+    public Result<Void> syncChunksToEs(@PathVariable String docId) {
+        knowledgeDocService.syncChunksToEs(docId);
         return Result.success();
     }
 
@@ -42,6 +51,18 @@ public class KnowledgeDocController {
                                @RequestBody KnowledgeDocUpdateRequest request){
         knowledgeDocService.update(docId, request);
         return Result.success();
+    }
+
+    /** 查询未删除文档的详情。 */
+    @GetMapping("/knowledge/document/{docId}")
+    public Result<KnowledgeDocVO> detail(@PathVariable String docId) {
+        return Result.success(knowledgeDocService.detail(docId));
+    }
+
+    /** 按知识库和文档名称分页查询未删除的文档。 */
+    @GetMapping("/knowledge/document/page")
+    public Result<KnowledgeDocPageVO> page(@ModelAttribute KnowledgeDocPageRequest request) {
+        return Result.success(knowledgeDocService.page(request));
     }
 
 }

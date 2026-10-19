@@ -66,8 +66,18 @@ public class DocChunkConsumer implements RocketMQListener<DocChunkEvent> {
         if (document == null || !message.getKbId().equals(document.getKbId())) {
             throw new IllegalArgumentException("分块消息与文档所属知识库不匹配");
         }
-        if (!"running".equals(document.getStatus()) || !Integer.valueOf(1).equals(document.getEnabled())) {
-            throw new IllegalStateException("文档必须已启用且处于分块处理中");
+        if ("success".equals(document.getStatus())) {
+            return;
+        }
+        if (!Integer.valueOf(1).equals(document.getEnabled())) {
+            throw new IllegalStateException("分块要求文档已启用");
+        }
+        if ("elasticing".equals(document.getStatus())) {
+            knowledgeChunkService.saveChunksInEs(message.getDocId(), message.getUser());
+            return;
+        }
+        if (!"chunking".equals(document.getStatus())) {
+            throw new IllegalStateException("文档未处于 chunking 或 elasticing 状态");
         }
         KnowledgeBaseDO knowledgeBase = knowledgeBaseMapper.selectById(document.getKbId());
         if (knowledgeBase == null || !StringUtils.hasText(knowledgeBase.getCollection())) {
@@ -96,6 +106,9 @@ public class DocChunkConsumer implements RocketMQListener<DocChunkEvent> {
                 deleteTempFile(sourceFile.toPath());
             }
         }
+
+        // PG 事务已经提交为 elasticing；ES 失败直接向外抛出，重试只执行 ES 阶段。
+        knowledgeChunkService.saveChunksInEs(message.getDocId(), message.getUser());
     }
 
     private File downloadToTemp(String objectKey) {

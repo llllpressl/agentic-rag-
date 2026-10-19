@@ -25,4 +25,8 @@ public interface KnowledgeChunkMapper extends BaseMapper<KnowledgeChunkDO> {
     @Delete("DELETE FROM t_knowledge_chunk WHERE kb_id = #{kbId}")
     int physicalDeleteByKbId(@Param("kbId") String kbId);
 
+    /** 按文档批量物理删除分块及向量，不经过 MyBatis-Plus 逻辑删除。 */
+    @Delete("DELETE FROM t_knowledge_chunk WHERE doc_id = #{docId}")
+    int physicalDeleteByDocId(@Param("docId") String docId);
+
 }

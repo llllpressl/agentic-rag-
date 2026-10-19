@@ -48,10 +48,6 @@ public class KnowledgeBaseController {
      */
     @DeleteMapping("/knowledge/base/{kb-id}")
     public Result<Void> delete (@PathVariable("kb-id") String kbId){
-        /**
-        knowledgeBaseService.delete(kbId);
-        return Result.success();
-        */
         try {
             knowledgeBaseService.delete(kbId);
             return Result.success();

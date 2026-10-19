@@ -33,7 +33,6 @@ import java.util.List;
  * 所有知识库原始文档共用一个桶，通过 collection 前缀分组，无需预先创建文件夹。
  * 知识库存在性和访问权限由调用方的业务服务校验。
  */
-/// TODO ai写的
 @Service
 @RequiredArgsConstructor
 public class RustFsStorageService {

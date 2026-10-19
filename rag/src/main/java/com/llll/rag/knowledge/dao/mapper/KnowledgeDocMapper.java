@@ -31,10 +31,11 @@ public interface KnowledgeDocMapper extends BaseMapper<KnowledgeDocDO> {
     int physicalDeleteByKbId(@Param("kbId") String kbId);
 
     // 逻辑删除与审计字段在同一条 SQL 中更新。
+    /** 原删除条件：WHERE id = #{docId} AND deleted = 0 AND status <> 'running' */
     @Update("""
             UPDATE t_knowledge_document
             SET deleted = 1, update_by = #{updateBy}, update_time = #{updateTime}
-            WHERE id = #{docId} AND deleted = 0 AND status <> 'running'
+            WHERE id = #{docId} AND deleted = 0 AND status IN ('pending', 'success')
             """)
     int logicalDeleteWithAudit(@Param("docId") String docId,
                                @Param("updateBy") String updateBy,

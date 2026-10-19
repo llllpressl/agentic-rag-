@@ -46,7 +46,7 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
     private final RustFsStorageService rustFsStorageService;
     private final ElasticsearchClient elasticsearchClient;
     private final TransactionTemplate transactionTemplate;
-    private final KnowledgeBaseOperationLock knowledgeBaseOperationLock;
+    private final KnowledgeBaseOperationLock knowledgeBaseOperationLock; ///TODO 这里用Lock 好奇怪
 
     @Value("${knowledge.elasticsearch.chunk-index:knowledge_chunk}")
     private String chunkIndex;
