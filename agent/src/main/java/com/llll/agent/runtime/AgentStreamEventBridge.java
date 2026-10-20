@@ -45,6 +45,7 @@ public class AgentStreamEventBridge {
     private final AtomicBoolean connectionClosed = new AtomicBoolean();
 
     private Msg resultMessage;
+    private AgentSseEvent terminalEvent;
 
     public boolean sendStart() {
         AgentSseEvent event = AgentSseEvent.builder()
@@ -84,6 +85,7 @@ public class AgentStreamEventBridge {
         connectionClosed.set(true);
     }
 
+    /** 持久化 assistant 并准备终态；连接和终态发送由运行句柄在清理后推进。 */
     public void finish(String interruptReason, Throwable exception) {
         AgentMessageDO message = buildAssistantMessage(interruptReason, exception);
         String assistantMessageId;
@@ -111,7 +113,24 @@ public class AgentStreamEventBridge {
                 .status(message.getStatus())
                 .reason(reason)
                 .build();
-        sendEvent(event);
+        /** 原实现保留：sendEvent(event); */
+        terminalEvent = event;
+    }
+
+    /** 运行句柄清理完成后发送终态；桥接器不持有或操作并发锁。 */
+    public void sendFinish(Throwable cleanupFailure) {
+        if (cleanupFailure != null) {
+            String assistantMessageId = null;
+            String status = null;
+            if (terminalEvent != null) {
+                assistantMessageId = terminalEvent.getAssistantMessageId();
+                status = terminalEvent.getStatus();
+            }
+            sendError("cleanup_error", "本轮资源清理异常，请稍后重试", assistantMessageId, status);
+        }
+        if (terminalEvent != null) {
+            sendEvent(terminalEvent);
+        }
     }
 
     private boolean sendDelta(String type, String delta) {
@@ -124,6 +143,7 @@ public class AgentStreamEventBridge {
         return sendEvent(event);
     }
 
+    /** 暂存错误事件；与成功终态一样，统一等到 sendFinish 时发送。 */
     private void sendError(String reason, String message,
                            String assistantMessageId, String status) {
         AgentSseEvent event = AgentSseEvent.builder()
@@ -135,7 +155,8 @@ public class AgentStreamEventBridge {
                 .reason(reason)
                 .message(message)
                 .build();
-        sendEvent(event);
+        /** 原实现保留：sendEvent(event); */
+        terminalEvent = event;
     }
 
     private boolean sendEvent(AgentSseEvent event) {

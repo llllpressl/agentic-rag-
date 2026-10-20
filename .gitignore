@@ -55,6 +55,17 @@ build/
 /bootstrap/src/main/resources/agenticrag-local.yaml
 /bootstrap/.runtime/
 
+# 独立检索评测代码；数据、结果与虚拟环境仅保存在本机。
+!/rag-eval/
+/rag-eval/.venv/
+/rag-eval/datasets/*
+/rag-eval/results/*
+/rag-eval/*.log
+/rag-eval/*.whl
+/rag-eval/wheels/
+/rag-eval/.cache/
+**/__pycache__/
+
 # GitHub copy excludes all local YAML configuration.
 *.yaml
 *.yml

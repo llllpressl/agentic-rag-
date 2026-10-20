@@ -2,6 +2,8 @@ package com.llll.agent.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import com.llll.agent.config.ReActAgentProvider;
+import com.llll.agent.concurrency.AgentRunGate;
+import com.llll.agent.concurrency.AgentRunLease;
 import com.llll.agent.controller.request.ConfirmRequest;
 import com.llll.agent.runtime.AgentRunHandle;
 import com.llll.agent.runtime.AgentStreamEventBridge;
@@ -34,6 +36,7 @@ public class AgentChatServiceImpl implements AgentChatService {
     private final AgentConversationService conversationService;
     private final AgentMessageService messageService;
     private final TransactionTemplate transactionTemplate;
+    private final AgentRunGate agentRunGate;
 
     private final ConcurrentHashMap<String, AgentRunHandle> runningTasks = new ConcurrentHashMap<>();
 
@@ -50,17 +53,27 @@ public class AgentChatServiceImpl implements AgentChatService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "会话 ID 不合法");
         }
         conversationId = conversationId == null ? IdWorker.get32UUID() : conversationId;
-        String taskId = IdWorker.get32UUID();// 用跟id一样长度的字段，雪花id还是啥
-        // TODO 后续使用 taskId 在 Redis 中控制并发，并记录任务存活状态。
-        readyStream(query, conversationId, taskId, userId, sseEmitter);
+
+        String taskId = IdWorker.getIdStr();
+        AgentRunLease runLease = agentRunGate.acquire(userId, conversationId, taskId);
+        try {
+            readyStream(query, conversationId, taskId, userId, sseEmitter, runLease);
+        } catch (RuntimeException | Error exception) {
+            // 未移交时回收启动资源；Service 正常返回不释放正在运行的任务。
+            if (!runLease.isTransferred()) {
+                runLease.release();
+            }
+            throw exception;
+        }
     }
 
     private void readyStream(String query, String conversationId, String taskId,
-                             String userId, SseEmitter sseEmitter) {
-        ReActAgent agent = reActAgentProvider.getAgent();
+                             String userId, SseEmitter sseEmitter, AgentRunLease runLease) {
+        ReActAgent agent = null;
 
         /** 会话准备和 user 消息入库放在短事务中；事务结束后才启动模型。 */
         try {
+            agent = reActAgentProvider.getAgent();
             ExecuteParam executeParam = transactionTemplate.execute(transactionStatus -> {
                 String title = conversationService.addConversation(userId, conversationId, query);
                 String userMessageId = messageService.addUserMessage(userId, conversationId, query);
@@ -76,17 +89,26 @@ public class AgentChatServiceImpl implements AgentChatService {
             if (executeParam == null) {
                 throw new IllegalStateException("对话准备失败");
             }
-            launchStream(new UserMessage(query), agent, executeParam);
-        } catch (RuntimeException exception) {
-            agent.close();
+            launchStream(new UserMessage(query), agent, executeParam, runLease);
+        } catch (RuntimeException | Error exception) {
+            if (!runLease.isTransferred() && agent != null) {
+                try {
+                    agent.close();
+                } catch (RuntimeException | Error closeException) {
+                    exception.addSuppressed(closeException);
+                }
+            }
             throw exception;
         }
     }
+
     @Builder
     private record ExecuteParam(SseEmitter emitter , String userId, String conversationId, String taskId, String title, String lastMessageId){
     }
 
-    private void launchStream(Msg input, ReActAgent agent, ExecuteParam executeParam) {
+
+    private void launchStream(Msg input, ReActAgent agent, ExecuteParam executeParam,
+                              AgentRunLease runLease) {
         RuntimeContext runtimeContext = RuntimeContext.builder()
                 .userId(executeParam.userId())
                 .sessionId(executeParam.conversationId())
@@ -109,11 +131,19 @@ public class AgentChatServiceImpl implements AgentChatService {
                 .agentRun(agentRun)
                 .emitter(executeParam.emitter())
                 .eventBridge(eventBridge)
+                .runLease(runLease)
                 .build();
-        if (runningTasks.putIfAbsent(executeParam.taskId(), handle) != null) {
-            throw new IllegalStateException("Agent 任务 ID 重复");
+        try {
+            if (runningTasks.putIfAbsent(executeParam.taskId(), handle) != null) {
+                throw new IllegalStateException("Agent 任务 ID 重复");
+            }
+            handle.start(() -> runningTasks.remove(executeParam.taskId(), handle));
+        } catch (RuntimeException | Error exception) {
+            if (!runLease.isTransferred()) {
+                runningTasks.remove(executeParam.taskId(), handle);
+            }
+            throw exception;
         }
-        handle.start(() -> runningTasks.remove(executeParam.taskId(), handle));
     }
 
     @Override

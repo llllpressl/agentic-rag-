@@ -1,5 +1,6 @@
 package com.llll.agent.runtime;
 
+import com.llll.agent.concurrency.AgentRunLease;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.agent.AgentRun;
 import io.agentscope.core.event.AgentEvent;
@@ -28,6 +29,7 @@ public class AgentRunHandle {
     private final AgentRun<AgentEvent> agentRun;
     private final SseEmitter emitter;
     private final AgentStreamEventBridge eventBridge;
+    private final AgentRunLease runLease;
 
     private final AtomicBoolean started = new AtomicBoolean();
     private final AtomicBoolean finished = new AtomicBoolean();
@@ -36,11 +38,14 @@ public class AgentRunHandle {
 
     private Runnable onReleased;
 
+
     public void start(Runnable onReleased) {
         if (!started.compareAndSet(false, true)) {
             throw new IllegalStateException("同一轮 Agent 任务不能重复启动");
         }
         this.onReleased = onReleased;
+        // 先准备释放回调、再移交锁、最后订阅，不依赖异步任务结束的快慢。
+        runLease.transferToRunHandle();
         try {
             registerCallbacks();
             if (!eventBridge.sendStart()) {
@@ -50,7 +55,7 @@ public class AgentRunHandle {
                     .subscribeOn(Schedulers.boundedElastic())
                     .publishOn(Schedulers.boundedElastic())
                     .subscribe(this::handleEvent, this::finish, () -> finish(null));
-        } catch (RuntimeException exception) {
+        } catch (RuntimeException | Error exception) {
             finish(exception);
         }
     }
@@ -108,28 +113,53 @@ public class AgentRunHandle {
         if (failure != null) {
             log.warn("Agent 本轮执行结束时存在异常，taskId={}", taskId, failure);
         }
+        Throwable finishFailure = null;
         try {
+            // 框架负责流终止前的状态保存及失败处理；这里只持久化 assistant 并准备终态。
             eventBridge.finish(interruptReason.get(), failure);
-        } catch (RuntimeException finishException) {
+        } catch (RuntimeException | Error finishException) {
             log.error("Agent 对话收尾失败，taskId={}", taskId, finishException);
-            emitter.completeWithError(finishException);
+            finishFailure = finishException;
         } finally {
-            release();
+            release(finishFailure);
         }
     }
 
-    private void release() {
+    private void release(Throwable finishFailure) {
+        Throwable cleanupFailure = finishFailure;
         try {
-            emitter.complete();
-        } finally {
-            try {
-                // Provider 当前每轮创建一个 Agent；完成状态保存后释放它的缓存和关闭钩子。
-                agent.close();
-            } finally {
-                if (onReleased != null) {
-                    onReleased.run();
-                }
+            // 只清理本轮 Agent 缓存和关闭钩子，不删除持久化会话状态。
+            agent.close();
+        } catch (RuntimeException | Error closeException) {
+            cleanupFailure = closeException;
+            log.error("关闭 Agent 资源失败，taskId={}", taskId, closeException);
+        }
+        try {
+            if (onReleased != null) {
+                onReleased.run();
             }
+        } catch (RuntimeException | Error removeException) {
+            cleanupFailure = removeException;
+            log.error("移除 Agent 活动任务失败，taskId={}", taskId, removeException);
+        }
+        if (!runLease.release()) {
+            cleanupFailure = new IllegalStateException("Agent 锁释放失败，请查看并发控制日志");
+        }
+        try {
+            // done/error 也等待清理和解锁结束后发送，协议字段保持不变。
+            eventBridge.sendFinish(cleanupFailure);
+        } catch (RuntimeException | Error sendException) {
+            cleanupFailure = sendException;
+            log.error("发送 Agent 终态事件失败，taskId={}", taskId, sendException);
+        }
+        try {
+            if (cleanupFailure == null) {
+                emitter.complete();
+            } else {
+                emitter.completeWithError(cleanupFailure);
+            }
+        } catch (RuntimeException | Error completeException) {
+            log.warn("结束 SSE 连接失败，taskId={}", taskId, completeException);
         }
     }
 }

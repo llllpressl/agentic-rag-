@@ -1,0 +1,12 @@
+-c requirements.lock.txt
+ragas==0.4.3
+openai==2.15.0
+instructor==1.14.3
+langchain==1.2.7
+langchain-core==1.2.7
+langchain-community==0.4.1
+langchain-openai==1.1.7
+datasets==4.4.2
+pydantic==2.12.5
+PyYAML==6.0.3
+matplotlib==3.10.8

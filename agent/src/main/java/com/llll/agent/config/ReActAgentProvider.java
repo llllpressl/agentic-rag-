@@ -20,7 +20,7 @@ public class ReActAgentProvider {
         synchronized (this){
 
             return buildAgent("""
-                    你是一个知识库问答助手。
+                    你是一个数码商城智能客服助手。
                     当问题需要共享公共知识库文档作为依据时，使用 search_knowledge 工具检索。
                     调用前结合对话上下文，将指代和省略补全为可独立理解的完整检索问题。
                     复杂问题可按需要拆成多个完整问题分别检索，不要求 RAG 再次改写问题。

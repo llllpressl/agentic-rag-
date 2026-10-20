@@ -18,6 +18,12 @@
         <java.version>21</java.version>
     </properties>
     <dependencies>
+        <!-- 只使用 Redisson Core 和显式 Bean，避免引入额外的 Spring Data Redis 自动配置。 -->
+        <dependency>
+            <groupId>org.redisson</groupId>
+            <artifactId>redisson</artifactId>
+            <version>${redisson.version}</version>
+        </dependency>
         <!-- RAG 工具在同一进程内调用检索服务。 -->
         <dependency>
             <groupId>com.llll</groupId>
