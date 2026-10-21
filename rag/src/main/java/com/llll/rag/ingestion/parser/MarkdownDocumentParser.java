@@ -92,7 +92,11 @@ public class MarkdownDocumentParser implements DocumentParser {
 
     private DocumentBlock parseBlock(Node node, String source, boolean globalHeadings, int index) {
         if (node instanceof ThematicBreak) {
-            // 水平分隔线只是装饰，不生成只有 "---" 的检索块。
+            /** 原行为：直接丢弃分隔线；现在将顶层分隔线保留为 Chunker 的结构边界。 */
+            if (globalHeadings) {
+                return textBlock(index, DocumentBlockType.THEMATIC_BREAK, sourceSlice(node, source));
+            }
+            // 容器内的装饰线不升级为全局章节边界。
             return null;
         }
         if (node instanceof Heading && globalHeadings) {
@@ -284,67 +288,4 @@ public class MarkdownDocumentParser implements DocumentParser {
         return source.substring(start, last.getInputIndex() + last.getLength());
     }
 
-    /** 历史原文切片实现，结构分块不再调用。内层注释结束符写作 * / 以保留原代码。
-    /** 标题和正文均按原始字符串的位置切片，保留 Markdown 标记、换行和空行。 * /
-    public ParseResult parseMarkdown(String markdown) {
-        if (markdown == null || markdown.isBlank()) {
-            throw new IllegalArgumentException("解析正文为空");
-        }
-        Node root = parser.parse(markdown);
-        List<DocumentBlock> blocks = new ArrayList<>();
-        int bodyStart = 0;
-        int level = 0;
-        String title = "";
-
-        for (Node node = root.getFirstChild(); node != null; node = node.getNext()) {
-            if (!(node instanceof Heading)) {
-                continue;
-            }
-            Heading heading = (Heading) node;
-            List<SourceSpan> spans = heading.getSourceSpans();
-            if (spans.isEmpty()) {
-                throw new IllegalStateException("Markdown 标题缺少源位置");
-            }
-            int headingStart = spans.getFirst().getInputIndex();
-            appendSourceBlock(blocks, level, title, markdown.substring(bodyStart, headingStart));
-
-            SourceSpan lastSpan = spans.getLast();
-            int headingEnd = lastSpan.getInputIndex() + lastSpan.getLength();
-            headingEnd = includeHeadingLineBreak(markdown, headingEnd);
-            level = heading.getLevel();
-            title = markdown.substring(headingStart, headingEnd);
-            bodyStart = headingEnd;
-        }
-        appendSourceBlock(blocks, level, title, markdown.substring(bodyStart));
-        if (blocks.isEmpty()) {
-            throw new IllegalArgumentException("文档没有可用于分块的标题或正文");
-        }
-        return ParseResult.builder()
-                .blocks(List.copyOf(blocks))
-                .build();
-    }
-
-    private int includeHeadingLineBreak(String source, int end) {
-        if (end < source.length() && source.charAt(end) == '\r') {
-            end++;
-        }
-        if (end < source.length() && source.charAt(end) == '\n') {
-            end++;
-        }
-        return end;
-    }
-
-    private void appendSourceBlock(List<DocumentBlock> blocks, int level, String title, String body) {
-        // 空白也属于原文，只跳过完全没有字符的结构块。
-        if (title.isEmpty() && body.isEmpty()) {
-            return;
-        }
-        blocks.add(DocumentBlock.builder()
-                .index(blocks.size())
-                .level(level)
-                .title(title)
-                .content(body)
-                .build());
-    }
-    */
 }

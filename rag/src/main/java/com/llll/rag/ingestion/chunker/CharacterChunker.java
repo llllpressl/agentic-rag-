@@ -7,16 +7,20 @@ import com.llll.rag.ingestion.model.DocumentChunk;
 import com.llll.rag.ingestion.parser.MarkdownTextNormalizer;
 import lombok.Builder;
 import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
 
-/** 原全文字符切分实现保留在文末注释中；当前按章节及结构在 Unicode 预算内分块。 */
+/** 复用 AST 章节及结构边界，普通正文按分隔符优先级递归切分后合并。 */
+@Slf4j
 @Component
 public class CharacterChunker implements Chunker {
     private final int target;
     private final int maximum;
+    private final RecursiveTextSplitter textSplitter = new RecursiveTextSplitter();
+    private final HtmlTableSplitter htmlTableSplitter = new HtmlTableSplitter();
 
     public CharacterChunker(ChunkingProperties properties) {
         target = properties.getTargetCharacters();
@@ -46,13 +50,27 @@ public class CharacterChunker implements Chunker {
         List<Section> sections = new ArrayList<>();
         List<DocumentBlock> headings = new ArrayList<>();
         List<DocumentBlock> body = new ArrayList<>();
+        int boundaryGroup = 0;
         for (DocumentBlock block : blocks) {
             validateBlock(block);
+            if (block.getType() == DocumentBlockType.THEMATIC_BREAK) {
+                if (!body.isEmpty()) {
+                    sections.add(Section.builder()
+                            .headings(List.copyOf(headings))
+                            .blocks(List.copyOf(body))
+                            .boundaryGroup(boundaryGroup)
+                            .build());
+                    body.clear();
+                }
+                boundaryGroup++;
+                continue;
+            }
             if (block.getType() == DocumentBlockType.HEADING) {
                 if (!body.isEmpty()) {
                     sections.add(Section.builder()
                             .headings(List.copyOf(headings))
                             .blocks(List.copyOf(body))
+                            .boundaryGroup(boundaryGroup)
                             .build());
                     body.clear();
                 }
@@ -69,6 +87,7 @@ public class CharacterChunker implements Chunker {
             sections.add(Section.builder()
                     .headings(List.copyOf(headings))
                     .blocks(List.copyOf(body))
+                    .boundaryGroup(boundaryGroup)
                     .build());
         }
         return sections;
@@ -137,13 +156,34 @@ public class CharacterChunker implements Chunker {
                             .originalHeadings(section.getHeadings())
                             .body(body)
                             .wholeSection(bodies.size() == 1)
+                            .boundaryGroup(section.getBoundaryGroup())
                             .build());
                 }
                 return result;
-            } catch (BlockBudgetException exception) {
+            } catch (ChunkBudgetException exception) {
                 if (selectedHeadings.size() > 1) {
-                    // 优先移除最远祖先，最具体标题不截断、不移到无正文的独立 Chunk。
+                    // 优先移除最远祖先；最具体标题仍过长时才显式缩略并记录日志。
                     selectedHeadings.removeFirst();
+                } else if (!selectedHeadings.isEmpty()
+                        && length(selectedHeadings.getFirst().getTitle()) > 1) {
+                    DocumentBlock heading = selectedHeadings.getFirst();
+                    int retained = Math.max(1, Math.min(length(heading.getTitle()) / 2, maximum / 4));
+                    String shortened;
+                    if (retained == 1) {
+                        shortened = heading.getTitle().substring(0, heading.getTitle().offsetByCodePoints(0, 1));
+                    } else {
+                        shortened = heading.getTitle().substring(0,
+                                heading.getTitle().offsetByCodePoints(0, retained - 1)) + "…";
+                    }
+                    selectedHeadings.set(0, DocumentBlock.builder()
+                            .index(heading.getIndex())
+                            .type(DocumentBlockType.HEADING)
+                            .level(heading.getLevel())
+                            .title(shortened)
+                            .content("")
+                            .build());
+                    log.warn("标题上下文超出分块预算，保留最具体标题的前缀，Block={}，保留码点={}",
+                            heading.getIndex(), retained);
                 } else {
                     throw new IllegalArgumentException("章节无法在 maxCharacters=" + maximum
                             + " 内保留必要上下文及正文：" + renderHeadings(selectedHeadings)
@@ -162,11 +202,29 @@ public class CharacterChunker implements Chunker {
         if (length(complete) <= budget) {
             return List.of(complete);
         }
-        List<String> pieces = new ArrayList<>();
+        List<List<String>> groups = new ArrayList<>();
+        StringBuilder paragraphs = new StringBuilder();
         for (DocumentBlock block : blocks) {
-            pieces.addAll(splitBlock(block, budget, preferred, List.of()));
+            if (block.getType() == DocumentBlockType.PARAGRAPH) {
+                if (!paragraphs.isEmpty()) {
+                    paragraphs.append("\n\n");
+                }
+                paragraphs.append(block.getContent());
+            } else {
+                appendParagraphs(groups, paragraphs, budget, preferred);
+                groups.add(splitBlock(block, budget, preferred, List.of()));
+            }
         }
-        return packPieces(pieces, "\n\n", null, List.of(), budget);
+        appendParagraphs(groups, paragraphs, budget, preferred);
+        return packPieces(groups, "\n\n", null, List.of(), budget, preferred);
+    }
+
+    private void appendParagraphs(List<List<String>> groups, StringBuilder paragraphs, int budget, int preferred) {
+        if (!paragraphs.isEmpty()) {
+            // 递归结果自带原分隔符；这里只收集，不能在这些片段之间插入额外空行。
+            groups.add(textSplitter.split(paragraphs.toString(), budget, preferred, List.of()));
+            paragraphs.setLength(0);
+        }
     }
 
     private List<String> splitBlock(DocumentBlock block, int budget, int preferred,
@@ -185,101 +243,32 @@ public class CharacterChunker implements Chunker {
         if (type == DocumentBlockType.TABLE) {
             return splitTable(block, budget, wrappers);
         }
+        if (type == DocumentBlockType.RAW) {
+            return htmlTableSplitter.split(block, budget, wrappers);
+        }
         if (isContainer(type)) {
             List<DocumentBlock> childWrappers = new ArrayList<>(wrappers);
             if (type != DocumentBlockType.LIST) {
                 childWrappers.add(block);
             }
-            List<String> pieces = new ArrayList<>();
+            List<List<String>> pieces = new ArrayList<>();
             for (DocumentBlock child : block.getChildren()) {
-                pieces.addAll(splitBlock(child, budget, preferred, childWrappers));
+                pieces.add(splitBlock(child, budget, preferred, childWrappers));
             }
             String separator = "\n\n";
             if (type == DocumentBlockType.LIST) {
                 separator = "\n";
             }
-            return packPieces(pieces, separator, block, wrappers, budget);
+            return packPieces(pieces, separator, block, wrappers, budget, preferred);
         }
         throw budgetFailure(block, "原始 HTML 或未识别结构不能安全拆分", length(complete));
     }
 
+
+
     private List<String> splitParagraph(DocumentBlock block, int budget, int preferred,
                                         List<DocumentBlock> wrappers) {
-        String text = block.getContent();
-        List<String> pieces = new ArrayList<>();
-        int start = 0;
-        while (start < text.length()) {
-            String remaining = text.substring(start);
-            if (fits(remaining, wrappers, budget)) {
-                pieces.add(remaining);
-                break;
-            }
-            int remainingCharacters = length(remaining);
-            int lower = 0;
-            int upper = Math.min(budget, remainingCharacters);
-            // 按实际外层引用符和列表缩进计算可容纳的前缀，不使用估算字符预算。
-            while (lower < upper) {
-                int middle = lower + (upper - lower + 1) / 2;
-                int end = text.offsetByCodePoints(start, middle);
-                if (fits(text.substring(start, end), wrappers, budget)) {
-                    lower = middle;
-                } else {
-                    upper = middle - 1;
-                }
-            }
-            if (lower < 1) {
-                throw budgetFailure(block, "列表或引用标记后没有正文预算", budget);
-            }
-            int desired = Math.min(preferred, lower);
-            int end = findParagraphBoundary(text, start, lower, desired);
-            String piece = text.substring(start, end);
-            if (piece.isBlank()) {
-                throw budgetFailure(block, "超长纯空白段无法与有效正文合并", length(piece));
-            }
-            pieces.add(piece);
-            start = end;
-        }
-        return pieces;
-    }
-
-    private int findParagraphBoundary(String text, int start, int maximumCharacters, int desired) {
-        int minimum = Math.max(1, desired / 2);
-        // 完整段落已由 AST 保留；长段落内依次选择句末、其他标点、换行或空白。
-        for (int kind = 0; kind < 3; kind++) {
-            int bestEnd = -1;
-            int bestDistance = Integer.MAX_VALUE;
-            int end = start;
-            for (int count = 1; count <= maximumCharacters; count++) {
-                end += Character.charCount(text.codePointAt(end));
-                if (count < minimum || !isParagraphBoundary(text, end, kind)) {
-                    continue;
-                }
-                int distance = Math.abs(count - desired);
-                if (distance < bestDistance) {
-                    bestEnd = end;
-                    bestDistance = distance;
-                }
-            }
-            if (bestEnd >= 0) {
-                return bestEnd;
-            }
-        }
-        return text.offsetByCodePoints(start, desired);
-    }
-
-    private boolean isParagraphBoundary(String text, int end, int kind) {
-        int previous = text.codePointBefore(end);
-        if (kind == 2) {
-            return Character.isWhitespace(previous);
-        }
-        if (kind == 1) {
-            return "，、,：:；;".indexOf(previous) >= 0;
-        }
-        if ("。！？".indexOf(previous) >= 0) {
-            return true;
-        }
-        return ".!?".indexOf(previous) >= 0
-                && (end == text.length() || Character.isWhitespace(text.codePointAt(end)));
+        return textSplitter.split(block.getContent(), budget, preferred, wrappers);
     }
 
     private List<String> splitCode(DocumentBlock block, int budget, List<DocumentBlock> wrappers) {
@@ -297,12 +286,41 @@ public class CharacterChunker implements Chunker {
             }
             String singleLine = MarkdownTextNormalizer.renderCode(block, line, fence);
             if (!fits(singleLine, wrappers, budget)) {
-                throw budgetFailure(block, "代码第 " + (index + 1) + " 行及围栏无法完整容纳", length(singleLine));
+                /** 原行为：单行超长直接失败；现仅对这一行按 Unicode 码点安全拆分。 */
+                pieces.addAll(splitLongCodeLine(block, line, fence, budget, wrappers));
+                continue;
             }
             current.append(line);
         }
         if (!current.isEmpty()) {
             appendCodePiece(pieces, block, current.toString(), fence);
+        }
+        return pieces;
+    }
+
+    private List<String> splitLongCodeLine(DocumentBlock block, String line, String fence,
+                                            int budget, List<DocumentBlock> wrappers) {
+        List<String> pieces = new ArrayList<>();
+        int start = 0;
+        while (start < line.length()) {
+            int lower = 0;
+            int upper = Math.min(budget, line.codePointCount(start, line.length()));
+            while (lower < upper) {
+                int middle = lower + (upper - lower + 1) / 2;
+                int end = line.offsetByCodePoints(start, middle);
+                String rendered = MarkdownTextNormalizer.renderCode(block, line.substring(start, end), fence);
+                if (fits(rendered, wrappers, budget)) {
+                    lower = middle;
+                } else {
+                    upper = middle - 1;
+                }
+            }
+            if (lower == 0) {
+                throw budgetFailure(block, "代码围栏及语言信息后没有正文预算", budget);
+            }
+            int end = line.offsetByCodePoints(start, lower);
+            appendCodePiece(pieces, block, line.substring(start, end), fence);
+            start = end;
         }
         return pieces;
     }
@@ -356,26 +374,35 @@ public class CharacterChunker implements Chunker {
         return pieces;
     }
 
-    private List<String> packPieces(List<String> pieces, String separator, DocumentBlock container,
-                                    List<DocumentBlock> wrappers, int budget) {
+    /** 原合并只受硬上限约束；现在将目标大小作为软约束，不拆开完整结构来凑满。 */
+    private List<String> packPieces(List<List<String>> groups, String separator, DocumentBlock container,
+                                    List<DocumentBlock> wrappers, int budget, int preferred) {
         List<String> result = new ArrayList<>();
         StringBuilder current = new StringBuilder();
-        for (String piece : pieces) {
-            String candidate = piece;
-            if (!current.isEmpty()) {
-                candidate = current + separator + piece;
-            }
-            String rendered = wrapCurrent(container, candidate);
-            if (!current.isEmpty() && !fits(rendered, wrappers, budget)) {
-                result.add(wrapCurrent(container, current.toString()));
-                current.setLength(0);
-            }
-            if (!current.isEmpty()) {
-                current.append(separator);
-            }
-            current.append(piece);
-            if (!fits(wrapCurrent(container, current.toString()), wrappers, budget)) {
-                throw new BlockBudgetException("结构片段加上外层标记后超出可用预算=" + budget);
+        for (List<String> pieces : groups) {
+            for (int pieceIndex = 0; pieceIndex < pieces.size(); pieceIndex++) {
+                String piece = pieces.get(pieceIndex);
+                String candidate = piece;
+                if (!current.isEmpty()) {
+                    candidate = current + separator + piece;
+                }
+                String rendered = wrapCurrent(container, candidate);
+                int currentLength = RecursiveTextSplitter.measuredLength(
+                        wrapCurrent(container, current.toString()), wrappers);
+                int candidateLength = RecursiveTextSplitter.measuredLength(rendered, wrappers);
+                boolean nearerTarget = candidateLength > preferred
+                        && Math.abs(currentLength - preferred) <= Math.abs(candidateLength - preferred);
+                if (!current.isEmpty() && (pieceIndex > 0 || !fits(rendered, wrappers, budget) || nearerTarget)) {
+                    result.add(wrapCurrent(container, current.toString()));
+                    current.setLength(0);
+                }
+                if (!current.isEmpty()) {
+                    current.append(separator);
+                }
+                current.append(piece);
+                if (!fits(wrapCurrent(container, current.toString()), wrappers, budget)) {
+                    throw new BlockBudgetException("结构片段加上外层标记后超出可用预算=" + budget);
+                }
             }
         }
         if (!current.isEmpty()) {
@@ -423,6 +450,9 @@ public class CharacterChunker implements Chunker {
     }
 
     private boolean sameParent(SectionChunk previous, SectionChunk next) {
+        if (previous.getBoundaryGroup() != next.getBoundaryGroup()) {
+            return false;
+        }
         if (!previous.isWholeSection() || !next.isWholeSection()) {
             return false;
         }
@@ -515,6 +545,7 @@ public class CharacterChunker implements Chunker {
     private static class Section {
         private final List<DocumentBlock> headings;
         private final List<DocumentBlock> blocks;
+        private final int boundaryGroup;
     }
 
     @Getter
@@ -524,187 +555,14 @@ public class CharacterChunker implements Chunker {
         private final List<DocumentBlock> originalHeadings;
         private final String body;
         private final boolean wholeSection;
+        private final int boundaryGroup;
     }
 
     /** 仅表示字符预算不足，允许上层尝试减少祖先标题；其他错误不参与降级。 */
-    private static class BlockBudgetException extends IllegalArgumentException {
+    private static class BlockBudgetException extends ChunkBudgetException {
         private BlockBudgetException(String message) {
             super(message);
         }
     }
 
-    /** 历史全文字符切分实现，不再调用。内层注释结束符写作 * / 以保留原代码。
-
-
-    private static final String LINE_BREAK = "(?:\\r\\n|\\r(?!\\n)|\\n)";
-    private static final Pattern SOURCE_PARAGRAPH_BREAK = Pattern.compile(
-            LINE_BREAK + "[\\t ]*" + LINE_BREAK + "(?:[\\t ]*" + LINE_BREAK + ")*");
-    private final int target;
-    private final int maximum;
-    private final int overlap;
-
-    public CharacterChunker(ChunkingProperties properties) {
-        target = properties.getTargetCharacters();
-        maximum = properties.getMaxCharacters();
-        overlap = properties.getOverlapCharacters();
-        if (target <= 0 || maximum < target || overlap < 0 || overlap >= target) {
-            throw new IllegalArgumentException("分块配置必须满足 0 <= overlap < target <= max");
-        }
-        if (overlap != 0) {
-            throw new IllegalArgumentException("原文保真分块要求 overlap-characters 为 0");
-        }
-    }
-
-    @Override
-    public List<DocumentChunk> chunk(List<DocumentBlock> blocks) {
-        String source = joinSourceBlocks(blocks);
-        List<DocumentChunk> chunks = new ArrayList<>();
-        int start = 0;
-        int remainingCharacters = source.codePointCount(0, source.length());
-        while (start < source.length()) {
-            int end;
-            if (remainingCharacters <= maximum) {
-                end = source.length();
-            } else {
-                end = findSourceEnd(source, start, remainingCharacters);
-            }
-            String content = source.substring(start, end);
-            appendSourceChunk(chunks, content);
-            remainingCharacters -= content.codePointCount(0, content.length());
-            // 下个 Chunk 紧接上个 Chunk，不补标题、不插分隔符、不重复正文。
-            start = end;
-        }
-        return List.copyOf(chunks);
-    }
-
-    private String joinSourceBlocks(List<DocumentBlock> blocks) {
-        if (blocks == null || blocks.isEmpty()) {
-            throw new IllegalArgumentException("待分块的 Block 不能为空");
-        }
-        StringBuilder source = new StringBuilder();
-        for (DocumentBlock block : blocks) {
-            if (block == null || block.getLevel() == null || block.getLevel() < 0 || block.getLevel() > 6) {
-                throw new IllegalArgumentException("Block 标题等级必须在 0 到 6 之间");
-            }
-            // Parser 已保留标题语法和换行，level 只描述结构，不用于生成标题前缀。
-            if (block.getTitle() != null) {
-                source.append(block.getTitle());
-            }
-            if (block.getContent() != null) {
-                source.append(block.getContent());
-            }
-        }
-        String text = source.toString();
-        if (text.isBlank()) {
-            throw new IllegalArgumentException("待分块的原文不能为空");
-        }
-        return text;
-    }
-
-    private int findSourceEnd(String source, int start, int remainingCharacters) {
-        int minimumCharacters = Math.max(1, target / 2);
-        // 为尾段预留空间，避免切到接近硬上限后只剩一个很小的尾块。
-        int upperCharacters = Math.min(maximum, remainingCharacters - minimumCharacters);
-        int lowerCharacters = Math.min(minimumCharacters, upperCharacters);
-        int desiredCharacters = Math.min(target, upperCharacters);
-        int lower = source.offsetByCodePoints(start, lowerCharacters);
-        int upper = source.offsetByCodePoints(start, upperCharacters);
-
-        int paragraphEnd = findParagraphEnd(source, start, lower, upper, desiredCharacters);
-        if (paragraphEnd >= 0) {
-            return paragraphEnd;
-        }
-        // 没有合适的段落边界时，依次寻找句子、完整行和空白边界。
-        for (int kind = 0; kind < 3; kind++) {
-            int boundaryEnd = findBoundaryEnd(source, start, lower, upper, desiredCharacters, kind);
-            if (boundaryEnd >= 0) {
-                return boundaryEnd;
-            }
-        }
-        int end = source.offsetByCodePoints(start, desiredCharacters);
-        if (splitsLineBreak(source, end)) {
-            if (end < upper) {
-                end++;
-            } else {
-                end--;
-            }
-        }
-        return end;
-    }
-
-    private int findParagraphEnd(String source, int start, int lower, int upper, int desiredCharacters) {
-        Matcher matcher = SOURCE_PARAGRAPH_BREAK.matcher(source);
-        matcher.region(start, upper);
-        int bestEnd = -1;
-        int bestDistance = Integer.MAX_VALUE;
-        while (matcher.find()) {
-            int end = matcher.end();
-            if (end < lower || splitsLineBreak(source, end)) {
-                continue;
-            }
-            int distance = Math.abs(source.codePointCount(start, end) - desiredCharacters);
-            if (distance < bestDistance) {
-                bestEnd = end;
-                bestDistance = distance;
-            }
-        }
-        return bestEnd;
-    }
-
-    private int findBoundaryEnd(String source, int start, int lower, int upper,
-                                int desiredCharacters, int kind) {
-        int bestEnd = -1;
-        int bestDistance = Integer.MAX_VALUE;
-        int end = lower;
-        int characters = source.codePointCount(start, lower);
-        while (end <= upper) {
-            if (!splitsLineBreak(source, end) && isSourceBoundary(source, end, kind)) {
-                int distance = Math.abs(characters - desiredCharacters);
-                if (distance < bestDistance) {
-                    bestEnd = end;
-                    bestDistance = distance;
-                }
-            }
-            if (end == upper) {
-                break;
-            }
-            end += Character.charCount(source.codePointAt(end));
-            characters++;
-        }
-        return bestEnd;
-    }
-
-    private boolean isSourceBoundary(String source, int end, int kind) {
-        int previous = source.codePointBefore(end);
-        if (kind == 1) {
-            return previous == '\n' || previous == '\r';
-        }
-        if (kind == 2) {
-            return Character.isWhitespace(previous);
-        }
-        if ("。！？；".indexOf(previous) >= 0) {
-            return true;
-        }
-        return ".!?;".indexOf(previous) >= 0
-                && (end == source.length() || Character.isWhitespace(source.codePointAt(end)));
-    }
-
-    private boolean splitsLineBreak(String source, int end) {
-        return end > 0 && end < source.length()
-                && source.charAt(end - 1) == '\r' && source.charAt(end) == '\n';
-    }
-
-    private void appendSourceChunk(List<DocumentChunk> chunks, String content) {
-        if (content.isBlank()) {
-            throw new IllegalArgumentException("原文存在无法在字符上限内合并的纯空白片段");
-        }
-        if (content.codePointCount(0, content.length()) > maximum) {
-            throw new IllegalArgumentException("分块文本超出字符上限");
-        }
-        chunks.add(DocumentChunk.builder()
-                .index(chunks.size())
-                .content(content)
-                .build());
-    }
-    */
 }

@@ -4,6 +4,7 @@ import com.llll.rag.ingestion.embedding.EmbeddingProperties;
 import com.llll.rag.knowledge.dao.mapper.RagSearchMapper;
 import com.llll.rag.search.model.RetrieveResult;
 import com.llll.rag.search.retriever.VectorRetriever;
+import com.llll.rag.search.routing.model.RetrievalScope;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -18,6 +19,21 @@ public class PgVectorRetriever implements VectorRetriever {
 
     @Override
     public List<RetrieveResult> retrieve(float[] queryVector, int topK) {
+        return retrieve(queryVector, topK, RetrievalScope.builder()
+                .unrestricted(true)
+                .kbIds(List.of())
+                .build());
+    }
+
+    @Override
+    public List<RetrieveResult> retrieve(float[] queryVector, int topK, RetrievalScope scope) {
+        if (scope == null) {
+            throw new IllegalArgumentException("向量检索范围不能为 null");
+        }
+        scope.validate();
+        if (!scope.isUnrestricted() && scope.getKbIds().isEmpty()) {
+            return List.of();
+        }
         if (queryVector == null || queryVector.length != embeddingProperties.getDimensions()) {
             throw new IllegalArgumentException("检索向量维度与 Embedding 配置不一致");
         }
@@ -37,7 +53,11 @@ public class PgVectorRetriever implements VectorRetriever {
             throw new IllegalArgumentException("检索向量不能为零向量");
         }
 
+        /** 原调用不接收知识库范围。
         List<RetrieveResult> results = ragSearchMapper.searchByVector(queryVector, topK);
+        */
+        List<RetrieveResult> results = ragSearchMapper.searchByVector(
+                queryVector, topK, scope.isUnrestricted(), scope.getKbIds());
         for (int index = 0; index < results.size(); index++) {
             results.get(index).setVectorRank(index + 1);
         }

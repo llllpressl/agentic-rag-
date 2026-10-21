@@ -53,6 +53,7 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
 
     @Override
     public String create(KnowledgeBaseCreateRequest requestParam) {
+        validateDescription(requestParam.getDescription());
         /// 1. 校验是否被重命名
         Long name = knowledgeBaseMapper.selectCount(
                 new LambdaQueryWrapper<KnowledgeBaseDO>()
@@ -74,6 +75,7 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
         /// 2. 构造 知识库实体， 并入库
         KnowledgeBaseDO knowledgeBase = KnowledgeBaseDO.builder()
                 .name(requestParam.getName())
+                .description(normalizeDescription(requestParam.getDescription()))
                 .collection(requestParam.getCollection())
                 .embeddingModel(requestParam.getEmbeddingModel())
                 .createBy(UserContext.getUser().getUsername())
@@ -87,6 +89,7 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
 
     @Override
     public void update(String kbId, KnowledgeBaseUpdateRequest requestParam) {
+        validateDescription(requestParam.getDescription());
         KnowledgeBaseDO knowledgeBase = knowledgeBaseMapper.selectById(kbId);
         if(knowledgeBase == null){
             throw new RuntimeException("知识库不存在，改你马");
@@ -105,9 +108,20 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
             throw new RuntimeException("你要重命名的名字 重名了，改你马");
         }
 
+        /** 原更新方式无法显式清空 description，且会将查询时的旧描述再次写回。
         knowledgeBase.setUpdateBy(UserContext.getUser().getUsername());
         knowledgeBase.setName(requestParam.getName());
         knowledgeBaseMapper.updateById(knowledgeBase);
+        */
+        KnowledgeBaseDO update = KnowledgeBaseDO.builder()
+                .id(kbId)
+                .name(requestParam.getName())
+                .updateBy(UserContext.getUser().getUsername())
+                .build();
+        knowledgeBaseMapper.update(update, new LambdaUpdateWrapper<KnowledgeBaseDO>()
+                .eq(KnowledgeBaseDO::getId, kbId)
+                .set(requestParam.getDescription() != null, KnowledgeBaseDO::getDescription,
+                        normalizeDescription(requestParam.getDescription())));
     }
 
     @Override
@@ -278,6 +292,7 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
         return KnowledgeBaseVO.builder()
                 .id(knowledgeBase.getId())
                 .name(knowledgeBase.getName())
+                .description(knowledgeBase.getDescription())
                 .collection(knowledgeBase.getCollection())
                 .embeddingModel(knowledgeBase.getEmbeddingModel())
                 .createTime(knowledgeBase.getCreateTime())
@@ -285,6 +300,19 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
                 .createBy(knowledgeBase.getCreateBy())
                 .updateBy(knowledgeBase.getUpdateBy())
                 .build();
+    }
+
+    private void validateDescription(String description) {
+        if (description != null && description.codePointCount(0, description.length()) > 1000) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "知识库描述不能超过 1000 个字符");
+        }
+    }
+
+    private String normalizeDescription(String description) {
+        if (StringUtils.isBlank(description)) {
+            return null;
+        }
+        return description.trim();
     }
 
     private String requireOperator() {

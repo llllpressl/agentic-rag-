@@ -1,6 +1,7 @@
 package com.llll.agent.config;
 
 import com.llll.agent.state.PgAgentStateStore;
+import com.llll.agent.memory.AgentContextCompactionMiddleware;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.tool.Toolkit;
 import io.agentscope.extensions.model.openai.OpenAIChatModel;
@@ -15,6 +16,7 @@ public class ReActAgentProvider {
     private final OpenAIChatModel openAIChatModel;
     private final PgAgentStateStore agentStateStore;
     private final Toolkit agentToolkit;
+    private final AgentContextCompactionMiddleware agentContextCompactionMiddleware;
 
     public ReActAgent getAgent(){
         synchronized (this){
@@ -44,6 +46,8 @@ public class ReActAgentProvider {
                 .maxRetries(agentProperties.getMaxRetries())
                 .enablePendingToolRecovery(true)
                 .stateStore(agentStateStore);
+        /** 追加会话上下文管理，复用当前 ReActAgent 及状态存储。 */
+        builder.middleware(agentContextCompactionMiddleware);
         return builder.build();
     }
 }

@@ -13,6 +13,8 @@ public class KnowledgeBaseVO {
 
     private String name;
 
+    private String description;
+
     private String collection;
 
     private String embeddingModel;

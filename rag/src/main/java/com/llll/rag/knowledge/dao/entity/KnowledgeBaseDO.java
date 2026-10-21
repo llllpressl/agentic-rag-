@@ -20,6 +20,8 @@ public class KnowledgeBaseDO {
 
     private String name;
 
+    private String description;
+
     private String collection;
 
     private String embeddingModel;

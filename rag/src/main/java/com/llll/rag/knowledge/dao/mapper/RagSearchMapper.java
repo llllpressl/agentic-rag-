@@ -46,6 +46,7 @@ public interface RagSearchMapper {
             @Param("topK") int topK);
     */
 
+    /** 原生效 SQL 不接收知识库范围，保留作审查依据。
     @Select("""
             SELECT c.id, c.content
             FROM t_knowledge_chunk c
@@ -67,6 +68,49 @@ public interface RagSearchMapper {
     List<RetrieveResult> searchByVector(
             @Param("queryVector") float[] queryVector,
             @Param("topK") int topK);
+    */
+
+    default List<RetrieveResult> searchByVector(float[] queryVector, int topK) {
+        return searchByVector(queryVector, topK, true, List.of());
+    }
+
+    /** XML 动态 SQL 中的向量距离小于号必须转义，空范围不能退化为全库。 */
+    @Select("""
+            <script>
+            SELECT c.id, c.content
+            FROM t_knowledge_chunk c
+            WHERE c.deleted = 0
+              AND c.enabled = 1
+              AND c.embedding IS NOT NULL
+              AND EXISTS (
+                  SELECT 1 FROM t_knowledge_document d
+                  WHERE d.id = c.doc_id AND d.kb_id = c.kb_id
+                    AND d.deleted = 0 AND d.enabled = 1 AND d.status = 'success'
+              )
+              AND EXISTS (
+                  SELECT 1 FROM t_knowledge_base k
+                  WHERE k.id = c.kb_id AND k.deleted = 0
+              )
+              <if test="!unrestricted">
+                  <choose>
+                      <when test="kbIds != null and kbIds.size() > 0">
+                          AND c.kb_id IN
+                          <foreach collection="kbIds" item="kbId" open="(" separator="," close=")">
+                              #{kbId}
+                          </foreach>
+                      </when>
+                      <otherwise>AND 1 = 0</otherwise>
+                  </choose>
+              </if>
+            ORDER BY c.embedding &lt;=> #{queryVector,jdbcType=OTHER,typeHandler=com.llll.rag.knowledge.dao.handler.VectorTypeHandler}
+            LIMIT #{topK}
+            </script>
+            """)
+    List<RetrieveResult> searchByVector(
+            @Param("queryVector") float[] queryVector,
+            @Param("topK") int topK,
+            @Param("unrestricted") boolean unrestricted,
+            @Param("kbIds") List<String> kbIds);
 
     /** ES 可以暂时落后于 PG；候选必须按 ID 回查，并使用当前 PG 正文。 */
     /** 原候选回查未校验文档完成状态。

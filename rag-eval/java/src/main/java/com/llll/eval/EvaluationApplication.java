@@ -9,6 +9,10 @@ import com.llll.rag.search.properties.RerankProperties;
 import com.llll.rag.search.retriever.impl.EsBm25Retriever;
 import com.llll.rag.search.retriever.impl.PgVectorRetriever;
 import com.llll.rag.service.serviceImpl.RagServiceImpl;
+import com.llll.rag.search.routing.JevClient;
+import com.llll.rag.search.routing.JevProperties;
+import com.llll.rag.search.routing.KnowledgeBaseRouter;
+import com.llll.rag.search.routing.RagRoutingProperties;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.SpringBootConfiguration;
@@ -26,7 +30,11 @@ import java.util.Map;
 @Import({EmbeddingProperties.class, EmbeddingServiceImpl.class,
         RagSearchProperties.class, RerankProperties.class, ElasticsearchConfiguration.class,
         RagRecallExecutorConfiguration.class, PgVectorRetriever.class, EsBm25Retriever.class,
+        /** 原装配末尾：
         RagServiceImpl.class, EvaluationSnapshot.class, RetrievalRunner.class, SourceDocumentExporter.class})
+        */
+        RagServiceImpl.class, EvaluationSnapshot.class, RetrievalRunner.class, SourceDocumentExporter.class,
+        JevProperties.class, RagRoutingProperties.class, JevClient.class, KnowledgeBaseRouter.class})
 public class EvaluationApplication {
 
     public static void main(String[] args) {

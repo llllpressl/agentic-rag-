@@ -11,6 +11,8 @@ public class KnowledgeBaseCreateRequest {
 
     private String name;
 
+    private String description;
+
     private String collection;
 
     private String embeddingModel;

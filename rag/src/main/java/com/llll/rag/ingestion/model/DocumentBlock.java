@@ -22,11 +22,9 @@ public class DocumentBlock {
     /** Markdown 标题等级 1 到 6；非全局标题块为 0。 */
     private Integer level;
 
-    /** 原约定：原始 Markdown 标题切片，保留标题标记与换行。 */
     /** 当前为可读标题文本；标题等级由 level 保留，其他块使用空字符串。 */
     private String title;
 
-    /** 原约定：标题之后到下一标题之前的原始正文切片。 */
     /** 当前为本结构块的正文；代码和 RAW 内容不做普通正文清洗。 */
     private String content;
 

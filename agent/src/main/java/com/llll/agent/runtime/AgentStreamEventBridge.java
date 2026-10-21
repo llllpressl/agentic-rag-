@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.llll.agent.controller.vo.AgentSseEvent;
 import com.llll.agent.dao.entity.AgentMessageDO;
+import com.llll.agent.memory.AgentContextLimitException;
 import com.llll.agent.service.AgentMessageService;
 import io.agentscope.core.event.AgentEvent;
 import io.agentscope.core.event.AgentResultEvent;
@@ -179,6 +180,10 @@ public class AgentStreamEventBridge {
         String reason = interruptReason;
         if (reason == null && exception != null) {
             reason = "execution_error";
+            /** 在既有 reason 字段细分上下文超限，不修改 SSE 事件结构。 */
+            if (AgentContextLimitException.isContextLimit(exception)) {
+                reason = AgentContextLimitException.REASON;
+            }
         }
         if (reason == null && resultMessage == null) {
             reason = "missing_result";

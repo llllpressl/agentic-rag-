@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.llll.rag.ingestion.embedding.EmbeddingService;
 import com.llll.rag.search.exception.RetrievalUnavailableException;
 import com.llll.rag.search.model.RecallChannelResult;
+import com.llll.rag.search.model.RecallRoundResult;
 import com.llll.rag.search.model.RecallChannelResult.Channel;
 import com.llll.rag.search.model.RecallChannelResult.FailureStage;
 import com.llll.rag.search.model.RecallChannelResult.Status;
@@ -17,11 +18,17 @@ import com.llll.rag.search.properties.RerankProperties;
 import com.llll.rag.search.request.RagSearchRequest;
 import com.llll.rag.search.retriever.KeywordRetriever;
 import com.llll.rag.search.retriever.VectorRetriever;
+import com.llll.rag.search.routing.KnowledgeBaseRouter;
+import com.llll.rag.search.routing.RagRoutingProperties;
+import com.llll.rag.search.routing.model.RetrievalScope;
+import com.llll.rag.search.routing.model.RouteDecision;
+import com.llll.rag.search.routing.model.RouteMode;
 import com.llll.rag.service.RagService;
 import com.llll.rag.knowledge.dao.mapper.RagSearchMapper;
 import jakarta.annotation.PreDestroy;
 import jakarta.json.JsonException;
 import lombok.extern.slf4j.Slf4j;
+import lombok.Builder;
 import org.apache.hc.client5.http.classic.methods.HttpPost;
 import org.apache.hc.client5.http.config.ConnectionConfig;
 import org.apache.hc.client5.http.config.RequestConfig;
@@ -67,6 +74,8 @@ public class RagServiceImpl implements RagService, AutoCloseable {
     private final RagSearchMapper ragSearchMapper;
     private final ThreadPoolTaskExecutor vectorRecallExecutor;
     private final ThreadPoolTaskExecutor keywordRecallExecutor;
+    private final KnowledgeBaseRouter knowledgeBaseRouter;
+    private final RagRoutingProperties routingProperties;
 
 
     public RagServiceImpl(
@@ -77,7 +86,12 @@ public class RagServiceImpl implements RagService, AutoCloseable {
             RerankProperties rerankProperties,
             RagSearchMapper ragSearchMapper,
             @Qualifier("vectorRecallExecutor") ThreadPoolTaskExecutor vectorRecallExecutor,
+            /** 原末尾参数：
             @Qualifier("keywordRecallExecutor") ThreadPoolTaskExecutor keywordRecallExecutor) {
+            */
+            @Qualifier("keywordRecallExecutor") ThreadPoolTaskExecutor keywordRecallExecutor,
+            KnowledgeBaseRouter knowledgeBaseRouter,
+            RagRoutingProperties routingProperties) {
         this.embeddingService = embeddingService;
         this.vectorRetriever = vectorRetriever;
         this.keywordRetriever = keywordRetriever;
@@ -86,6 +100,8 @@ public class RagServiceImpl implements RagService, AutoCloseable {
         this.ragSearchMapper = ragSearchMapper;
         this.vectorRecallExecutor = vectorRecallExecutor;
         this.keywordRecallExecutor = keywordRecallExecutor;
+        this.knowledgeBaseRouter = knowledgeBaseRouter;
+        this.routingProperties = routingProperties;
         this.httpClient = HttpClients.custom()
                 .setConnectionManager(PoolingHttpClientConnectionManagerBuilder.create()
                         .setDefaultConnectionConfig(ConnectionConfig.custom()
@@ -103,6 +119,7 @@ public class RagServiceImpl implements RagService, AutoCloseable {
     }
 
 
+    /** 原统一检索入口未接入知识库路由，保留供审查；新入口继续复用原召回和排序能力。
     @Override
     public List<RetrieveResult> search(RagSearchRequest request) {
         validateRequest(request);
@@ -156,6 +173,110 @@ public class RagServiceImpl implements RagService, AutoCloseable {
         return new ArrayList<>(rankedResults.subList(0, resultCount));
     }
 
+    */
+
+    @Override
+    public List<RetrieveResult> search(RagSearchRequest request) {
+        validateRequest(request);
+        requireSearchNotInterrupted();
+        String query = request.getQuery();
+        RouteDecision decision = knowledgeBaseRouter.route(query);
+        boolean retrievalFallback = false;
+        try {
+            requireSearchNotInterrupted();
+            if (decision.getMode() == RouteMode.NONE) {
+                return new ArrayList<>();
+            }
+            QueryEmbeddingState embeddingState = QueryEmbeddingState.builder()
+                    .allowEmbedding(true)
+                    .queryVector(null)
+                    .build();
+            RecallRoundResult firstRound = recallRound(query, decision.getScope(), embeddingState);
+            List<RetrieveResult> fusedResults = fuseRound(firstRound);
+            boolean degraded = firstRound.isDegraded();
+
+            boolean scopedRoute = decision.getMode() == RouteMode.SINGLE || decision.getMode() == RouteMode.MULTI;
+            if (scopedRoute && fusedResults.size() < routingProperties.getFallbackMinChunks()) {
+                requireSearchNotInterrupted();
+                retrievalFallback = true;
+                // 固定首次向量快照；被取消的旧任务不能向兜底任务补写向量或触发再次 Embedding。
+                QueryEmbeddingState fallbackEmbedding = QueryEmbeddingState.builder()
+                        .allowEmbedding(false)
+                        .queryVector(firstRound.getQueryVector())
+                        .build();
+                RecallRoundResult fallbackRound = recallRound(query, decision.getGlobalScope(), fallbackEmbedding);
+                List<RetrieveResult> fallbackResults = fuseRound(fallbackRound);
+                if (!fallbackResults.isEmpty() || !fallbackRound.isDegraded()) {
+                    fusedResults = fallbackResults;
+                    degraded = fallbackRound.isDegraded();
+                } else {
+                    // 全局召回失败且没有候选时保留首次证据；两轮都没有证据则报告不可用。
+                    degraded = true;
+                }
+            }
+            if (fusedResults.isEmpty()) {
+                if (degraded) {
+                    throw new RetrievalUnavailableException();
+                }
+                return new ArrayList<>();
+            }
+            List<RetrieveResult> rankedResults = rerankOrKeepFusion(query, fusedResults);
+            requireSearchNotInterrupted();
+            int resultCount = Math.min(searchProperties.getFinalTopK(), rankedResults.size());
+            return new ArrayList<>(rankedResults.subList(0, resultCount));
+        } finally {
+            log.info("知识库路由完成，routingMode={}，candidateKbCount={}，selectedKbIds={}，"
+                            + "jevDurationMs={}，routingFallback={}，retrievalFallback={}",
+                    decision.getMode(), decision.getCandidateKbCount(), decision.getKbIds(),
+                    decision.getJevDurationMs(), decision.isRoutingFallback(), retrievalFallback);
+        }
+    }
+
+    private List<RetrieveResult> fuseRound(RecallRoundResult round) {
+        requireSearchNotInterrupted();
+        return rrf(round.getVectorResult().getCandidates(), round.getKeywordResult().getCandidates(),
+                searchProperties.getFusionTopK());
+    }
+
+    private RecallRoundResult recallRound(String query, RetrievalScope scope, QueryEmbeddingState embeddingState) {
+        requireSearchNotInterrupted();
+        scope.validate();
+        long startedNanos = System.nanoTime();
+        long vectorBudgetNanos = Math.min(
+                searchProperties.getVectorTimeout().toNanos(), searchProperties.getRecallTimeout().toNanos());
+        long keywordBudgetNanos = Math.min(
+                searchProperties.getKeywordTimeout().toNanos(), searchProperties.getRecallTimeout().toNanos());
+        Future<RecallChannelResult> vectorFuture = null;
+        Future<RecallChannelResult> keywordFuture = null;
+        RecallChannelResult vectorResult;
+        RecallChannelResult keywordResult;
+        try {
+            vectorFuture = submitRecall(query, Channel.VECTOR, vectorRecallExecutor,
+                    startedNanos, vectorBudgetNanos, scope, embeddingState);
+            keywordFuture = submitRecall(query, Channel.KEYWORD, keywordRecallExecutor,
+                    startedNanos, keywordBudgetNanos, scope, embeddingState);
+            if (keywordBudgetNanos <= vectorBudgetNanos) {
+                keywordResult = awaitRecall(keywordFuture, Channel.KEYWORD, startedNanos, keywordBudgetNanos);
+                vectorResult = awaitRecall(vectorFuture, Channel.VECTOR, startedNanos, vectorBudgetNanos);
+            } else {
+                vectorResult = awaitRecall(vectorFuture, Channel.VECTOR, startedNanos, vectorBudgetNanos);
+                keywordResult = awaitRecall(keywordFuture, Channel.KEYWORD, startedNanos, keywordBudgetNanos);
+            }
+        } finally {
+            cancelRecall(vectorFuture, vectorRecallExecutor);
+            cancelRecall(keywordFuture, keywordRecallExecutor);
+        }
+        requireSearchNotInterrupted();
+        logRecallResult(vectorResult);
+        logRecallResult(keywordResult);
+        return RecallRoundResult.builder()
+                .vectorResult(vectorResult)
+                .keywordResult(keywordResult)
+                .queryVector(embeddingState.queryVector)
+                .build();
+    }
+
+    /** 原任务没有范围与请求内向量缓存，替换实现见下方。
     private Future<RecallChannelResult> submitRecall(
             String query, Channel channel, ThreadPoolTaskExecutor executor, long startedNanos, long budgetNanos) {
         try {
@@ -214,6 +335,91 @@ public class RagServiceImpl implements RagService, AutoCloseable {
             return buildRecallResult(channel, Status.FAILED, List.of(), stage,
                     exception.getClass().getSimpleName(), startedNanos);
         }
+    }
+
+    */
+
+    private Future<RecallChannelResult> submitRecall(
+            String query, Channel channel, ThreadPoolTaskExecutor executor, long startedNanos, long budgetNanos,
+            RetrievalScope scope, QueryEmbeddingState embeddingState) {
+        try {
+            return executor.submit(() -> recallChannel(query, channel, startedNanos, budgetNanos, scope, embeddingState));
+        } catch (RejectedExecutionException exception) {
+            RecallChannelResult result = buildRecallResult(channel, Status.FAILED, List.of(),
+                    FailureStage.SUBMISSION, exception.getClass().getSimpleName(), startedNanos);
+            return CompletableFuture.completedFuture(result);
+        }
+    }
+
+    private RecallChannelResult recallChannel(String query, Channel channel, long startedNanos, long budgetNanos,
+                                              RetrievalScope scope, QueryEmbeddingState embeddingState) {
+        requireSearchNotInterrupted();
+        if (System.nanoTime() - startedNanos >= budgetNanos) {
+            return buildRecallResult(channel, Status.TIMEOUT, List.of(), FailureStage.WAITING, null, startedNanos);
+        }
+        FailureStage stage = FailureStage.ES;
+        try {
+            List<RetrieveResult> candidates;
+            if (!scope.isUnrestricted() && scope.getKbIds().isEmpty()) {
+                return buildRecallResult(channel, Status.SUCCESS, List.of(), null, null, startedNanos);
+            }
+            if (channel == Channel.VECTOR) {
+                stage = FailureStage.EMBEDDING;
+                float[] queryVector = embeddingState.queryVector;
+                if (queryVector == null) {
+                    if (!embeddingState.allowEmbedding) {
+                        return buildRecallResult(channel, Status.FAILED, List.of(), stage,
+                                "QueryEmbeddingUnavailable", startedNanos);
+                    }
+                    List<float[]> vectors = embeddingService.embedBatch(List.of(query));
+                    if (vectors == null || vectors.size() != 1 || vectors.getFirst() == null) {
+                        throw new IllegalStateException("单问题向量化必须返回一个向量");
+                    }
+                    requireSearchNotInterrupted();
+                    queryVector = vectors.getFirst();
+                    embeddingState.queryVector = queryVector;
+                }
+                requireSearchNotInterrupted();
+                if (System.nanoTime() - startedNanos >= budgetNanos) {
+                    return buildRecallResult(channel, Status.TIMEOUT, List.of(), stage, null, startedNanos);
+                }
+                stage = FailureStage.PG_VECTOR;
+                candidates = vectorRetriever.retrieve(queryVector, searchProperties.getVectorTopK(), scope);
+            } else {
+                candidates = keywordRetriever.retrieve(query, searchProperties.getBm25TopK(), scope);
+            }
+            requireSearchNotInterrupted();
+            if (candidates == null) {
+                throw new IllegalStateException("召回器返回了 null 结果");
+            }
+            for (RetrieveResult candidate : candidates) {
+                if (candidate == null || !StringUtils.hasText(candidate.getId())
+                        || !StringUtils.hasText(candidate.getContent())) {
+                    throw new IllegalStateException("召回候选缺少 Chunk ID 或正文");
+                }
+                Integer rank = candidate.getBm25Rank();
+                if (channel == Channel.VECTOR) {
+                    rank = candidate.getVectorRank();
+                }
+                if (rank == null || rank < 1) {
+                    throw new IllegalStateException("召回候选缺少合法排名");
+                }
+            }
+            return buildRecallResult(channel, Status.SUCCESS, candidates, null, null, startedNanos);
+        } catch (IllegalStateException | DataAccessException | ElasticsearchException | JsonException exception) {
+            requireSearchNotInterrupted();
+            return buildRecallResult(channel, Status.FAILED, List.of(), stage,
+                    exception.getClass().getSimpleName(), startedNanos);
+        }
+    }
+
+    /** 每轮各有状态对象；只有首次向量分支可以调用 Embedding。 */
+    @Builder
+    private static class QueryEmbeddingState {
+
+        private final boolean allowEmbedding;
+
+        private volatile float[] queryVector;
     }
 
     private RecallChannelResult awaitRecall(

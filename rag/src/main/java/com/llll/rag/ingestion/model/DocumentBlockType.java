@@ -9,5 +9,6 @@ public enum DocumentBlockType {
     TABLE,
     CODE_BLOCK,
     QUOTE,
-    RAW
+    RAW,
+    THEMATIC_BREAK
 }
